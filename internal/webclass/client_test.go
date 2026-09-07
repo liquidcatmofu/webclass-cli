@@ -3,6 +3,7 @@ package webclass
 import (
 	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"sort"
