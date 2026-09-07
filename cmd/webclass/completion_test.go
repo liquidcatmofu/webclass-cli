@@ -4,22 +4,33 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/liquidcatmofu/webclass-cli/internal/cache"
 	"github.com/liquidcatmofu/webclass-cli/internal/state"
+	"github.com/liquidcatmofu/webclass-cli/internal/webclass"
 )
 
-func TestCompletionCandidatesUseManifestWithoutNetwork(t *testing.T) {
+func TestCompletionCandidatesUseCourseCacheAndManifestWithoutNetwork(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	dir := t.TempDir()
+
+	if err := cache.SaveCourses([]webclass.Course{
+		{ID: "02_26036", Name: "言語解析演習"},
+		{ID: "02_26046", Name: "システム工学"},
+		{ID: "02_26098", Name: "人工知能"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	manifest := &state.Manifest{Version: 1, Entries: map[string]state.Entry{
 		"a": {CourseID: "02_26036", CourseName: "言語解析演習", ResourceID: "one", ResourceTitle: "第1回 演習問題"},
 		"b": {CourseID: "02_26036", CourseName: "言語解析演習", ResourceID: "two", ResourceTitle: "第2回 正規表現，NFAへの変換"},
-		"c": {CourseID: "02_26046", CourseName: "システム工学", ResourceID: "three", ResourceTitle: "Week01:Operations Research"},
 	}}
 	if err := manifest.Save(dir); err != nil {
 		t.Fatal(err)
 	}
 
 	got := completionCandidates([]string{"pull", "--dir", dir, "02_"})
-	if len(got) != 2 || got[0] != "02_26036" || got[1] != "02_26046" {
+	if len(got) != 3 || got[0] != "02_26036" || got[1] != "02_26046" || got[2] != "02_26098" {
 		t.Fatalf("course completion = %#v", got)
 	}
 
