@@ -208,7 +208,7 @@ complete -c webclass -f -a '(__webclass_complete)'
 complete -c webclass.exe -f -a '(__webclass_complete)'
 `
 
-const powershellCompletion = `Register-ArgumentCompleter -Native -CommandName webclass,webclass.exe -ScriptBlock {
+const powershellCompletion = `Register-ArgumentCompleter -Native -CommandName webclass,webclass.exe,'.\webclass.exe','./webclass.exe' -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
     $elements = @($commandAst.CommandElements)
