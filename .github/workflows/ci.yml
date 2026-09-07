@@ -19,6 +19,9 @@ jobs:
       - name: Resolve dependencies
         run: |
           go mod tidy
+          echo '--- go.mod ---'
+          cat go.mod
+          echo '--- go.sum ---'
           cat go.sum
       - name: Test
         run: go test ./...
