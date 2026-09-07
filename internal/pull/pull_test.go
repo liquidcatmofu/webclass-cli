@@ -2,6 +2,7 @@ package pull
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/liquidcatmofu/webclass-cli/internal/state"
@@ -40,6 +41,46 @@ func TestResourcePathUngroupedDoesNotCreateSyntheticDirectory(t *testing.T) {
 	want := filepath.Join("course", "material", "file.pdf")
 	if got != want {
 		t.Fatalf("resourcePath() = %q, want %q", got, want)
+	}
+}
+
+func TestSelectMaterialsPrefersExactThenUniqueSubstring(t *testing.T) {
+	materials := []webclass.Resource{
+		{ID: "one", Title: "第1回 演習問題"},
+		{ID: "two", Title: "第2回 演習問題"},
+		{ID: "three", Title: "第2回 正規表現，NFAへの変換"},
+	}
+	stats := webclass.PullResourceStats{ResourceGroups: map[string]string{
+		"one": "演習問題", "two": "演習問題", "three": "資料",
+	}}
+
+	got, err := selectMaterials(materials, stats, "第2回 演習問題")
+	if err != nil || len(got) != 1 || got[0].ID != "two" {
+		t.Fatalf("exact select = %#v, %v", got, err)
+	}
+
+	got, err = selectMaterials(materials, stats, "NFAへの変換")
+	if err != nil || len(got) != 1 || got[0].ID != "three" {
+		t.Fatalf("substring select = %#v, %v", got, err)
+	}
+}
+
+func TestSelectMaterialsRefusesAmbiguousMatch(t *testing.T) {
+	materials := []webclass.Resource{
+		{ID: "one", Title: "第1回 演習問題"},
+		{ID: "two", Title: "第2回 演習問題"},
+	}
+	stats := webclass.PullResourceStats{ResourceGroups: map[string]string{
+		"one": "前半", "two": "後半",
+	}}
+
+	got, err := selectMaterials(materials, stats, "演習問題")
+	if err == nil || got != nil {
+		t.Fatalf("ambiguous select = %#v, %v; want refusal", got, err)
+	}
+	message := err.Error()
+	if !strings.Contains(message, "前半/第1回 演習問題 [one]") || !strings.Contains(message, "後半/第2回 演習問題 [two]") {
+		t.Fatalf("ambiguity message = %q", message)
 	}
 }
 
