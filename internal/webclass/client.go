@@ -29,20 +29,34 @@ type rateLimitedTransport struct {
 	lastDone time.Time
 }
 
+type rateLimitedBody struct {
+	io.ReadCloser
+	once    sync.Once
+	onClose func()
+}
+
+func (b *rateLimitedBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.once.Do(b.onClose)
+	return err
+}
+
 func (t *rateLimitedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Serialize all requests made through this client. Besides limiting server
-	// load, this prevents future parallel code from overlapping WebClass
-	// material/session requests accidentally.
+	// Keep this lock until the response body is closed. That makes the guarantee
+	// stronger than merely serializing request headers: a PDF body cannot still
+	// be downloading when another WebClass request starts.
 	t.mu.Lock()
-	defer t.mu.Unlock()
 
 	if t.interval > 0 && !t.lastDone.IsZero() {
 		wait := time.Until(t.lastDone.Add(t.interval))
 		if wait > 0 {
 			timer := time.NewTimer(wait)
-			defer timer.Stop()
 			select {
 			case <-req.Context().Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				t.mu.Unlock()
 				return nil, req.Context().Err()
 			case <-timer.C:
 			}
@@ -50,8 +64,25 @@ func (t *rateLimitedTransport) RoundTrip(req *http.Request) (*http.Response, err
 	}
 
 	resp, err := t.base.RoundTrip(req)
-	t.lastDone = time.Now()
-	return resp, err
+	if err != nil {
+		t.lastDone = time.Now()
+		t.mu.Unlock()
+		return nil, err
+	}
+	if resp.Body == nil {
+		t.lastDone = time.Now()
+		t.mu.Unlock()
+		return resp, nil
+	}
+
+	resp.Body = &rateLimitedBody{
+		ReadCloser: resp.Body,
+		onClose: func() {
+			t.lastDone = time.Now()
+			t.mu.Unlock()
+		},
+	}
+	return resp, nil
 }
 
 func New(baseURL string) (*Client, error) {
@@ -81,8 +112,8 @@ func New(baseURL string) (*Client, error) {
 }
 
 // SetRequestInterval enforces a minimum quiet period between completed HTTP
-// requests. The transport also serializes requests, so pull never talks to
-// WebClass concurrently even if callers become concurrent in the future.
+// requests. The transport also serializes response bodies, so pull never talks
+// to WebClass concurrently even if callers become concurrent in the future.
 func (c *Client) SetRequestInterval(interval time.Duration) {
 	if interval < 0 {
 		interval = 0
