@@ -77,6 +77,7 @@ func run(args []string) error {
 		dir := fs.String("dir", "webclass", "download directory")
 		groupDirs := fs.Bool("group-dirs", false, "insert WebClass group folders between course and material directories")
 		interval := fs.Duration("interval", time.Second, "minimum quiet interval between WebClass HTTP requests")
+		material := fs.String("material", "", "pull only one material by exact title, unique substring, or contents ID")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -110,13 +111,30 @@ func run(args []string) error {
 			return fmt.Errorf("course %q not found; run `webclass courses` to list course IDs", courseID)
 		}
 
-		result, err := pull.Run(client, *dir, *selected, pull.Options{GroupDirs: *groupDirs})
+		result, err := pull.Run(client, *dir, *selected, pull.Options{GroupDirs: *groupDirs, Material: *material})
 		if err != nil {
 			return err
 		}
 		fmt.Printf("\n%d new, %d changed, %d unchanged, %d failed\n", result.New, result.Changed, result.Unchanged, result.Failed)
 		if result.Failed > 0 {
 			return errors.New("some resources failed to download")
+		}
+		return nil
+
+	case "completion":
+		if len(args) != 2 {
+			return errors.New("completion requires one shell: bash, zsh, fish, or powershell")
+		}
+		script, err := completionScript(args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Print(script)
+		return nil
+
+	case "__complete":
+		for _, candidate := range completionCandidates(args[1:]) {
+			fmt.Println(candidate)
 		}
 		return nil
 
@@ -138,9 +156,11 @@ func usageText() string {
 Usage:
   webclass auth [--base-url URL] [--browser PATH]
   webclass courses [--base-url URL]
-  webclass pull [--base-url URL] [--dir DIR] [--group-dirs] [--interval DURATION] <course-id>
+  webclass pull [--base-url URL] [--dir DIR] [--group-dirs] [--interval DURATION] [--material NAME] <course-id>
+  webclass completion bash|zsh|fish|powershell
 
 The default WebClass instance is https://webclass.kosen-k.go.jp/webclass/.
 Pull defaults to a 1s quiet interval between WebClass HTTP requests and never sends concurrent requests.
+Shell completion never accesses WebClass; dynamic course/material candidates come only from the local manifest.
 `
 }
