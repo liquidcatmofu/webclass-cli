@@ -20,6 +20,8 @@ For safety, pull discovery only considers entries whose WebClass category is exa
 
 For downloadable material entries, `pull` resolves the current download link each time rather than persisting short-lived download URLs, downloads files, and records SHA-256 hashes in `.webclass-manifest.json`. Re-running it reports files as new, changed, or unchanged.
 
+`pull` is intentionally polite to the WebClass server. It sends no concurrent HTTP requests and defaults to a one-second quiet interval between requests. Course/index pages are scanned first without entering materials; candidate materials are then processed strictly one at a time. For a started textbook material, the CLI downloads its files and submits the observed WebClass `資料を閉じる` action before opening the next material. If a started material cannot be closed or its close action cannot be recognized, pull stops instead of opening another material. Progress is printed as `[current/total]` for each candidate.
+
 Assignment submission is intentionally not included in the first MVP because it has side effects and needs captured/verified WebClass form behavior before automating it.
 
 ## Build
@@ -76,6 +78,12 @@ Then select exactly one course by ID:
 ./webclass pull --dir ~/Documents/webclass <course-id>
 ```
 
+The default request interval is one second. It can be changed explicitly with Go duration syntax:
+
+```sh
+./webclass pull --interval 2s --dir ~/Documents/webclass <course-id>
+```
+
 The default layout is:
 
 ```text
@@ -109,7 +117,7 @@ For example:
       exercise.pdf
 ```
 
-If an existing manifest was created without `--group-dirs`, running with the option later relocates unchanged files into the grouped layout and updates the manifest path rather than treating them as changed downloads.
+If an existing manifest was created without `--group-dirs`, running with the option later relocates unchanged files into the grouped layout and updates the manifest path rather than treating them as changed downloads. Empty directories left behind by relocation/renaming are pruned only when they are actually empty; the configured download root and directories containing other files are never removed.
 
 WebClass handles textbook-body PDFs and downloadable attachments differently. Attachments expose their original filename through `file_name`, so that name is preserved. A textbook-body PDF may only expose an internal hexadecimal storage basename such as `b0b6db7f1cf1e354.pdf`; when no explicit `file_name` exists, the CLI names that PDF after the WebClass material title instead. Existing manifest entries using the old opaque basename are migrated by matching the same material ID and SHA-256 hash.
 
@@ -125,4 +133,4 @@ All commands accept `--base-url`. For example:
 
 ## Caveats
 
-WebClass is not a stable public HTML API. This project currently uses selectors observed on WebClass 12.x and may need parser updates when the site changes. The download discovery code follows same-origin frames and WebClass `filedownload(...)` links, but not every material type is covered yet.
+WebClass is not a stable public HTML API. This project currently uses selectors and material-close form behavior observed on WebClass 12.x and may need parser updates when the site changes. The download discovery code follows same-origin frames and WebClass `filedownload(...)` links, but not every material type is covered yet.
