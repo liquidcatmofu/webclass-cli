@@ -330,7 +330,58 @@ func removeOldPath(root, oldRel, newRel string) {
 	if oldRel == "" || filepath.Clean(oldRel) == filepath.Clean(newRel) {
 		return
 	}
-	_ = os.Remove(filepath.Join(root, oldRel))
+	oldPath, ok := managedPath(root, oldRel)
+	if !ok {
+		return
+	}
+	if err := os.Remove(oldPath); err != nil && !os.IsNotExist(err) {
+		return
+	}
+	pruneEmptyParents(root, filepath.Dir(oldPath))
+}
+
+func managedPath(root, rel string) (string, bool) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", false
+	}
+	targetAbs, err := filepath.Abs(filepath.Join(root, rel))
+	if err != nil {
+		return "", false
+	}
+	inside, err := filepath.Rel(rootAbs, targetAbs)
+	if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(os.PathSeparator)) || filepath.IsAbs(inside) {
+		return "", false
+	}
+	return targetAbs, true
+}
+
+func pruneEmptyParents(root, start string) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return
+	}
+	current, err := filepath.Abs(start)
+	if err != nil {
+		return
+	}
+
+	for {
+		rel, err := filepath.Rel(rootAbs, current)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+			return
+		}
+		// os.Remove only removes a directory when it is empty. If it contains
+		// another downloaded file or anything the user placed there, stop.
+		if err := os.Remove(current); err != nil {
+			return
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return
+		}
+		current = parent
+	}
 }
 
 func sanitize(name string) string {
