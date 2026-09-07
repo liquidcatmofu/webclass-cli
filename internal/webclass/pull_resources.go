@@ -35,7 +35,20 @@ func (c *Client) PullResources(course Course) ([]Resource, PullResourceStats, er
 	visited := map[string]bool{}
 	var pages []Resource
 
-	if err := c.scanCoursePage(course, course.URL, 0, visited, &stats, &pages); err != nil {
+	// Course links on the WebClass dashboard point to
+	// /course.php/<id>/login?acs_=... . Visiting that URL establishes the current
+	// course in the WebClass session, but the actual contents list lives at
+	// /course.php/<id>/. Do not try to parse the login endpoint as the course page.
+	indexURL := c.courseIndexURL(course.ID)
+	if course.URL != "" && course.URL != indexURL {
+		resp, err := c.get(course.URL)
+		if err != nil {
+			return nil, stats, fmt.Errorf("enter course %s: %w", course.ID, err)
+		}
+		resp.Body.Close()
+	}
+
+	if err := c.scanCoursePage(course, indexURL, 0, visited, &stats, &pages); err != nil {
 		return nil, stats, err
 	}
 
@@ -77,6 +90,10 @@ func (c *Client) PullResources(course Course) ([]Resource, PullResourceStats, er
 		}
 	}
 	return out, stats, nil
+}
+
+func (c *Client) courseIndexURL(courseID string) string {
+	return c.Base.ResolveReference(mustParse("course.php/" + url.PathEscape(courseID) + "/")).String()
 }
 
 func (c *Client) scanCoursePage(course Course, rawURL string, depth int, visited map[string]bool, stats *PullResourceStats, pages *[]Resource) error {
