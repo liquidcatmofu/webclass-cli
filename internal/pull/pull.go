@@ -26,6 +26,7 @@ type Result struct {
 
 type Options struct {
 	GroupDirs bool
+	Material  string
 }
 
 var (
@@ -45,7 +46,15 @@ func Run(client *webclass.Client, root string, course webclass.Course, options O
 		return Result{}, fmt.Errorf("scan %s: %w", course.Name, err)
 	}
 
-	fmt.Printf("Materials: %d, candidates: %d\n", stats.Materials, len(materials))
+	materials, err = selectMaterials(materials, stats, options.Material)
+	if err != nil {
+		return Result{}, err
+	}
+	if strings.TrimSpace(options.Material) == "" {
+		fmt.Printf("Materials: %d, candidates: %d\n", stats.Materials, len(materials))
+	} else {
+		fmt.Printf("Materials: %d, selected: %d (%q)\n", stats.Materials, len(materials), options.Material)
+	}
 	printGroupOverview(stats)
 	printGroupedIssues(stats)
 
@@ -146,6 +155,58 @@ func Run(client *webclass.Client, root string, course webclass.Course, options O
 	return result, nil
 }
 
+func selectMaterials(materials []webclass.Resource, stats webclass.PullResourceStats, query string) ([]webclass.Resource, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return materials, nil
+	}
+
+	var exact []webclass.Resource
+	for _, material := range materials {
+		if strings.EqualFold(strings.TrimSpace(material.Title), query) || material.ID == query {
+			exact = append(exact, material)
+		}
+	}
+	if len(exact) == 1 {
+		return exact, nil
+	}
+	if len(exact) > 1 {
+		return nil, ambiguousMaterialError(query, exact, stats)
+	}
+
+	q := strings.ToLower(query)
+	var partial []webclass.Resource
+	for _, material := range materials {
+		group := stats.ResourceGroups[material.ID]
+		qualified := group + "/" + material.Title
+		if strings.Contains(strings.ToLower(material.Title), q) ||
+			strings.Contains(strings.ToLower(qualified), q) ||
+			strings.Contains(strings.ToLower(material.ID), q) {
+			partial = append(partial, material)
+		}
+	}
+	if len(partial) == 1 {
+		return partial, nil
+	}
+	if len(partial) == 0 {
+		return nil, fmt.Errorf("material %q not found; no material was opened", query)
+	}
+	return nil, ambiguousMaterialError(query, partial, stats)
+}
+
+func ambiguousMaterialError(query string, matches []webclass.Resource, stats webclass.PullResourceStats) error {
+	lines := make([]string, 0, len(matches))
+	for _, material := range matches {
+		group := stats.ResourceGroups[material.ID]
+		if group == "" {
+			group = "(ungrouped)"
+		}
+		lines = append(lines, fmt.Sprintf("  %s/%s [%s]", group, material.Title, material.ID))
+	}
+	sort.Strings(lines)
+	return fmt.Errorf("material %q is ambiguous; no material was opened:\n%s", query, strings.Join(lines, "\n"))
+}
+
 func printGroupOverview(stats webclass.PullResourceStats) {
 	if len(stats.GroupOrder) == 0 {
 		return
@@ -178,7 +239,6 @@ func printGroupedIssues(stats webclass.PullResourceStats) {
 			if item.Group == group {
 				lines = append(lines, "skip (requires input): "+item.Title)
 			}
-		}
 		for _, item := range stats.NoFiles {
 			if item.Group == group {
 				lines = append(lines, "no downloadable file: "+item.Title)
@@ -229,10 +289,6 @@ func pullOne(client *webclass.Client, root string, manifest *state.Manifest, res
 	old, exists := manifest.Entries[key]
 	oldKey := key
 
-	// Older versions used WebClass's opaque internal PDF basename for textbook
-	// bodies (for example b0b6db7f1cf1e354.pdf). If this pull replaces that
-	// basename with the material title, migrate the matching manifest entry
-	// instead of treating the same bytes as a second file.
 	if !exists && renamedOpaque {
 		if migratedKey, migratedEntry, ok := findOpaqueManifestEntry(manifest, resource, hash); ok {
 			oldKey, old, exists = migratedKey, migratedEntry, true
@@ -307,10 +363,6 @@ func downloadFilename(resource webclass.Resource, dl *webclass.Download) (string
 		filename = sanitize(resource.Title)
 	}
 
-	// Attachments expose their real filename through file_name on file_down.php
-	// and/or download.php. Preserve it even when it happens to look opaque.
-	// Textbook-body PDFs do not expose an original filename; WebClass stores them
-	// under an internal hexadecimal basename. Give those files the material title.
 	if opaquePDFFilename.MatchString(filename) &&
 		!hasFileNameParameter(resource.DownloadURL) &&
 		!hasFileNameParameter(dl.URL) {
@@ -419,8 +471,6 @@ func pruneEmptyParents(root, start string) {
 		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
 			return
 		}
-		// os.Remove only removes a directory when it is empty. If it contains
-		// another downloaded file or anything the user placed there, stop.
 		if err := os.Remove(current); err != nil {
 			return
 		}
