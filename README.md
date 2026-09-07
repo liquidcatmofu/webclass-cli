@@ -2,7 +2,7 @@
 
 Unofficial CLI client for WebClass, initially targeting the National Institute of Technology (KOSEN) WebClass instance.
 
-The CLI deliberately does **not** store your Microsoft / SAML username or password. `webclass auth` opens a normal Chromium window so you can complete SAML login and two-factor authentication yourself, then stores only cookies for the WebClass host.
+The CLI deliberately does **not** store your Microsoft / SAML username or password. `webclass auth` opens an installed Chromium-based browser so you can complete SAML login and two-factor authentication yourself, then stores only cookies for the WebClass host.
 
 ## Status
 
@@ -18,18 +18,24 @@ webclass pull --dir ./materials <course-id>
 
 For safety, pull discovery only considers entries whose WebClass category is exactly `資料`. Questionnaire, report, self-study, and any unknown/future categories are not opened by `pull`.
 
-For directly downloadable material entries, `pull` resolves the current download link each time rather than persisting short-lived download URLs, downloads files, and records SHA-256 hashes in `.webclass-manifest.json`. Re-running it reports files as new, changed, or unchanged.
-
-Materials that require pressing WebClass's `開始` button are not entered yet. Starting a WebClass material can update usage history and may consume an execution-count limit, so this must be handled conservatively rather than treating every material as safe to start.
+For downloadable material entries, `pull` resolves the current download link each time rather than persisting short-lived download URLs, downloads files, and records SHA-256 hashes in `.webclass-manifest.json`. Re-running it reports files as new, changed, or unchanged.
 
 Assignment submission is intentionally not included in the first MVP because it has side effects and needs captured/verified WebClass form behavior before automating it.
 
 ## Build
 
-Requires Go 1.23+ and a Chromium-compatible browser that Rod can launch.
+Requires Go 1.23+ and an installed Chromium-based browser (Chrome, Chromium, or Edge).
+
+macOS/Linux:
 
 ```sh
 go build -o webclass ./cmd/webclass
+```
+
+Windows:
+
+```powershell
+go build -o webclass.exe ./cmd/webclass
 ```
 
 ## Authentication
@@ -38,7 +44,21 @@ go build -o webclass ./cmd/webclass
 ./webclass auth
 ```
 
-A Chromium window opens. Complete the normal SAML/Microsoft sign-in and 2FA flow. Once WebClass is reached, the CLI stores WebClass cookies under your OS user config directory with file mode `0600`.
+`auth` auto-detects an installed Chromium-based browser and does not ask Rod to download its pinned Chromium build. Rod's `leakless` helper is also disabled for this flow because the browser is closed explicitly and the helper executable can trigger antivirus false positives on Windows.
+
+To use a specific browser executable:
+
+```sh
+./webclass auth --browser /path/to/chrome
+```
+
+On Windows, for example:
+
+```powershell
+.\webclass.exe auth --browser "C:\Program Files\Google\Chrome\Application\chrome.exe"
+```
+
+A browser window opens. Complete the normal SAML/Microsoft sign-in and 2FA flow. Once WebClass is reached, the CLI stores WebClass cookies under your OS user config directory with file mode `0600` where supported by the OS.
 
 The dedicated browser profile is also stored under the app config directory so a later re-authentication can reuse browser-side sign-in state. The HTTP client itself uses only the saved WebClass cookies.
 
