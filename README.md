@@ -12,6 +12,7 @@ Early MVP. The current commands are:
 webclass auth
 webclass courses
 webclass pull --dir ./materials <course-id>
+webclass completion bash|zsh|fish|powershell
 ```
 
 `pull` is deliberately scoped to exactly one course. Use `webclass courses` to obtain its course ID.
@@ -84,6 +85,14 @@ The default request interval is one second. It can be changed explicitly with Go
 ./webclass pull --interval 2s --dir ~/Documents/webclass <course-id>
 ```
 
+To update only one WebClass material, use `--material` before the course ID:
+
+```sh
+./webclass pull --dir ~/Documents/webclass --material '第2回 正規表現，NFAへの変換' 02_26036
+```
+
+The selector checks, in order, an exact material title, an exact WebClass contents ID, then a unique substring of the material title, `group/title`, or contents ID. If the selector matches zero or multiple materials, the command exits before opening any material and prints the ambiguous candidates when applicable. A selected material can contain more than one downloadable file; all downloadable files belonging to that material are updated together.
+
 The default layout is:
 
 ```text
@@ -122,6 +131,36 @@ If an existing manifest was created without `--group-dirs`, running with the opt
 WebClass handles textbook-body PDFs and downloadable attachments differently. Attachments expose their original filename through `file_name`, so that name is preserved. A textbook-body PDF may only expose an internal hexadecimal storage basename such as `b0b6db7f1cf1e354.pdf`; when no explicit `file_name` exists, the CLI names that PDF after the WebClass material title instead. Existing manifest entries using the old opaque basename are migrated by matching the same material ID and SHA-256 hash.
 
 The manifest stores stable material identity, file path, size and content hash; it does not store resolved short-lived download URLs.
+
+## Shell completion
+
+Completion scripts are generated without an extra dependency.
+
+Bash:
+
+```sh
+source <(webclass completion bash)
+```
+
+Zsh:
+
+```sh
+source <(webclass completion zsh)
+```
+
+Fish:
+
+```fish
+webclass completion fish | source
+```
+
+PowerShell:
+
+```powershell
+webclass.exe completion powershell | Out-String | Invoke-Expression
+```
+
+Commands and flags are completed directly. Course IDs and material titles are read only from the local `.webclass-manifest.json` under the selected `--dir`; shell completion never contacts WebClass, so repeated Tab presses do not create server load. This also means a course/material that has never appeared in the local manifest may need to be typed manually the first time.
 
 ## Instance override
 
