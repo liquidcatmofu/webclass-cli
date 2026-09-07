@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/liquidcatmofu/webclass-cli/internal/auth"
+	"github.com/liquidcatmofu/webclass-cli/internal/cache"
 	"github.com/liquidcatmofu/webclass-cli/internal/pull"
 	"github.com/liquidcatmofu/webclass-cli/internal/webclass"
 )
@@ -66,6 +67,9 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
+		if err := cache.SaveCourses(courses); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not update course completion cache: %v\n", err)
+		}
 		for _, c := range courses {
 			fmt.Printf("%s\t%s\n", c.ID, c.Name)
 		}
@@ -99,6 +103,9 @@ func run(args []string) error {
 		courses, err := client.Courses()
 		if err != nil {
 			return err
+		}
+		if err := cache.SaveCourses(courses); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not update course completion cache: %v\n", err)
 		}
 		var selected *webclass.Course
 		for i := range courses {
@@ -161,6 +168,6 @@ Usage:
 
 The default WebClass instance is https://webclass.kosen-k.go.jp/webclass/.
 Pull defaults to a 1s quiet interval between WebClass HTTP requests and never sends concurrent requests.
-Shell completion never accesses WebClass; dynamic course/material candidates come only from the local manifest.
+Shell completion never accesses WebClass; course IDs come from the last courses/pull cache and material names come from the local manifest.
 `
 }
