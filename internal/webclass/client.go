@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -19,6 +20,38 @@ var ErrNotAuthenticated = errors.New("WebClass session is missing or expired; ru
 type Client struct {
 	Base *url.URL
 	HTTP *http.Client
+}
+
+type rateLimitedTransport struct {
+	base     http.RoundTripper
+	interval time.Duration
+	mu       sync.Mutex
+	lastDone time.Time
+}
+
+func (t *rateLimitedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Serialize all requests made through this client. Besides limiting server
+	// load, this prevents future parallel code from overlapping WebClass
+	// material/session requests accidentally.
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.interval > 0 && !t.lastDone.IsZero() {
+		wait := time.Until(t.lastDone.Add(t.interval))
+		if wait > 0 {
+			timer := time.NewTimer(wait)
+			defer timer.Stop()
+			select {
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			case <-timer.C:
+			}
+		}
+	}
+
+	resp, err := t.base.RoundTrip(req)
+	t.lastDone = time.Now()
+	return resp, err
 }
 
 func New(baseURL string) (*Client, error) {
@@ -45,6 +78,26 @@ func New(baseURL string) (*Client, error) {
 		Base: base,
 		HTTP: &http.Client{Jar: jar, Timeout: 45 * time.Second},
 	}, nil
+}
+
+// SetRequestInterval enforces a minimum quiet period between completed HTTP
+// requests. The transport also serializes requests, so pull never talks to
+// WebClass concurrently even if callers become concurrent in the future.
+func (c *Client) SetRequestInterval(interval time.Duration) {
+	if interval < 0 {
+		interval = 0
+	}
+	base := c.HTTP.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if existing, ok := base.(*rateLimitedTransport); ok {
+		existing.mu.Lock()
+		existing.interval = interval
+		existing.mu.Unlock()
+		return
+	}
+	c.HTTP.Transport = &rateLimitedTransport{base: base, interval: interval}
 }
 
 func (c *Client) resolve(ref string) (*url.URL, error) {
