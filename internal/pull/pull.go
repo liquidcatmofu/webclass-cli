@@ -38,15 +38,9 @@ func Run(client *webclass.Client, root string, course webclass.Course) (Result, 
 	}
 
 	fmt.Printf("Materials: %d, started: %d, downloadable files: %d\n", stats.Materials, stats.Started, len(resources))
-	for _, title := range stats.SkippedLimited {
-		fmt.Fprintf(os.Stderr, "- skip (execution limit): %s\n", title)
-	}
-	for _, title := range stats.SkippedInteractive {
-		fmt.Fprintf(os.Stderr, "- skip (requires input): %s\n", title)
-	}
-	for _, title := range stats.NoFiles {
-		fmt.Fprintf(os.Stderr, "- no downloadable file: %s\n", title)
-	}
+	printGroupOverview(stats)
+	printGroupedIssues(stats)
+
 	if stats.Materials == 0 {
 		fmt.Fprintln(os.Stderr, "No entries categorized exactly as 資料 were found.")
 		fmt.Fprintf(os.Stderr, "Diagnostic: documents=%d rows=%d frames=%d\n", stats.Documents, stats.Rows, stats.Frames)
@@ -64,10 +58,20 @@ func Run(client *webclass.Client, root string, course webclass.Course) (Result, 
 	}
 
 	var result Result
+	currentGroup := ""
 	for _, resource := range resources {
+		group := stats.ResourceGroups[resource.ID]
+		if group == "" {
+			group = "(ungrouped)"
+		}
+		if group != currentGroup {
+			fmt.Printf("\n[%s]\n", group)
+			currentGroup = group
+		}
+
 		status, err := pullOne(client, root, manifest, resource)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "! %s / %s: %v\n", course.Name, resource.Title, err)
+			fmt.Fprintf(os.Stderr, "  ! %s: %v\n", resource.Title, err)
 			result.Failed++
 			continue
 		}
@@ -84,6 +88,54 @@ func Run(client *webclass.Client, root string, course webclass.Course) (Result, 
 		return result, err
 	}
 	return result, nil
+}
+
+func printGroupOverview(stats webclass.PullResourceStats) {
+	if len(stats.GroupOrder) == 0 {
+		return
+	}
+	fmt.Println("Groups:")
+	for _, group := range stats.GroupOrder {
+		categories := stats.GroupCategories[group]
+		parts := make([]string, 0, len(categories))
+		for category, count := range categories {
+			parts = append(parts, fmt.Sprintf("%s=%d", category, count))
+		}
+		sort.Strings(parts)
+		suffix := ""
+		if categories["資料"] == 0 {
+			suffix = " (not opened)"
+		}
+		fmt.Printf("  %s: %s%s\n", group, strings.Join(parts, ", "), suffix)
+	}
+}
+
+func printGroupedIssues(stats webclass.PullResourceStats) {
+	for _, group := range stats.GroupOrder {
+		var lines []string
+		for _, item := range stats.SkippedLimited {
+			if item.Group == group {
+				lines = append(lines, "skip (execution limit): "+item.Title)
+			}
+		}
+		for _, item := range stats.SkippedInteractive {
+			if item.Group == group {
+				lines = append(lines, "skip (requires input): "+item.Title)
+			}
+		}
+		for _, item := range stats.NoFiles {
+			if item.Group == group {
+				lines = append(lines, "no downloadable file: "+item.Title)
+			}
+		}
+		if len(lines) == 0 {
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "\n[%s]\n", group)
+		for _, line := range lines {
+			fmt.Fprintf(os.Stderr, "  - %s\n", line)
+		}
+	}
 }
 
 func pullOne(client *webclass.Client, root string, manifest *state.Manifest, resource webclass.Resource) (string, error) {
@@ -135,7 +187,7 @@ func pullOne(client *webclass.Client, root string, manifest *state.Manifest, res
 	if exists {
 		if old.SHA256 == hash {
 			os.Remove(tmpName)
-			fmt.Printf("= %s / %s\n", resource.CourseName, rel)
+			fmt.Printf("  = %s\n", rel)
 			return "unchanged", nil
 		}
 		status, prefix = "changed", "!"
@@ -148,7 +200,7 @@ func pullOne(client *webclass.Client, root string, manifest *state.Manifest, res
 		ResourceID: resource.ID, ResourceTitle: resource.Title,
 		Filename: filename, Path: rel, SHA256: hash, Size: n, UpdatedAt: time.Now(),
 	}
-	fmt.Printf("%s %s / %s\n", prefix, resource.CourseName, rel)
+	fmt.Printf("  %s %s\n", prefix, rel)
 	return status, nil
 }
 
