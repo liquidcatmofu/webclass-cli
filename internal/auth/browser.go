@@ -13,25 +13,46 @@ import (
 	"github.com/liquidcatmofu/webclass-cli/internal/session"
 )
 
-func BrowserLogin(ctx context.Context, base *url.URL) error {
+func BrowserLogin(ctx context.Context, base *url.URL, browserBin string) error {
 	profileDir, err := session.BrowserProfileDir()
 	if err != nil {
 		return err
 	}
 
-	controlURL, err := launcher.New().
+	if strings.TrimSpace(browserBin) == "" {
+		var found bool
+		browserBin, found = launcher.LookPath()
+		if !found {
+			return fmt.Errorf("no installed Chromium-based browser found; install Chrome/Chromium/Edge or pass --browser PATH")
+		}
+	}
+
+	// Do not let Rod download its pinned Chromium build. Besides avoiding a large
+	// implicit download, this also avoids antivirus false positives around
+	// downloaded browser binaries on Windows.
+	//
+	// Leakless is disabled as well. Rod enables it by default and materializes a
+	// helper executable on Windows; that helper has a history of Defender false
+	// positives. This auth flow closes the browser explicitly, so the extra
+	// watchdog process is unnecessary here.
+	l := launcher.New().
+		Bin(browserBin).
+		Leakless(false).
 		UserDataDir(profileDir).
-		Headless(false).
-		Launch()
+		Headless(false)
+
+	controlURL, err := l.Launch()
 	if err != nil {
-		return fmt.Errorf("launch Chromium: %w", err)
+		return fmt.Errorf("launch browser %q: %w", browserBin, err)
 	}
 
 	browser := rod.New().ControlURL(controlURL).Context(ctx)
 	if err := browser.Connect(); err != nil {
-		return fmt.Errorf("connect to Chromium: %w", err)
+		return fmt.Errorf("connect to browser: %w", err)
 	}
 	defer browser.Close()
+
+	fmt.Printf("Using browser: %s\n", browserBin)
 
 	loginURL := base.ResolveReference(&url.URL{Path: "login.php", RawQuery: "auth_mode=SAML"}).String()
 	page, err := browser.Page(protoTarget(loginURL))
