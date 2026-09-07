@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"time"
 
 	"github.com/liquidcatmofu/webclass-cli/internal/auth"
 	"github.com/liquidcatmofu/webclass-cli/internal/pull"
@@ -75,11 +76,15 @@ func run(args []string) error {
 		base := fs.String("base-url", defaultBaseURL, "WebClass base URL")
 		dir := fs.String("dir", "webclass", "download directory")
 		groupDirs := fs.Bool("group-dirs", false, "insert WebClass group folders between course and material directories")
+		interval := fs.Duration("interval", time.Second, "minimum quiet interval between WebClass HTTP requests")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		if fs.NArg() != 1 {
 			return errors.New("pull requires exactly one course ID; run `webclass courses` to list course IDs")
+		}
+		if *interval < 0 {
+			return errors.New("pull --interval must not be negative")
 		}
 		courseID := fs.Arg(0)
 
@@ -87,6 +92,9 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
+		client.SetRequestInterval(*interval)
+		fmt.Printf("Request interval: %s; concurrent requests: disabled\n", interval.String())
+
 		courses, err := client.Courses()
 		if err != nil {
 			return err
@@ -130,8 +138,9 @@ func usageText() string {
 Usage:
   webclass auth [--base-url URL] [--browser PATH]
   webclass courses [--base-url URL]
-  webclass pull [--base-url URL] [--dir DIR] [--group-dirs] <course-id>
+  webclass pull [--base-url URL] [--dir DIR] [--group-dirs] [--interval DURATION] <course-id>
 
 The default WebClass instance is https://webclass.kosen-k.go.jp/webclass/.
+Pull defaults to a 1s quiet interval between WebClass HTTP requests and never sends concurrent requests.
 `
 }
