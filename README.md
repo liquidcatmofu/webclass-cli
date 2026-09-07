@@ -11,10 +11,16 @@ Early MVP. The current commands are:
 ```console
 webclass auth
 webclass courses
-webclass pull --dir ./materials
+webclass pull --dir ./materials <course-id>
 ```
 
-`pull` scans WebClass material entries, resolves the current download link each time (rather than persisting short-lived download URLs), downloads files, and records SHA-256 hashes in `.webclass-manifest.json`. Re-running it reports files as new, changed, or unchanged.
+`pull` is deliberately scoped to exactly one course. Use `webclass courses` to obtain its course ID.
+
+For safety, pull discovery only considers entries whose WebClass category is exactly `資料`. Questionnaire, report, self-study, and any unknown/future categories are not opened by `pull`.
+
+For directly downloadable material entries, `pull` resolves the current download link each time rather than persisting short-lived download URLs, downloads files, and records SHA-256 hashes in `.webclass-manifest.json`. Re-running it reports files as new, changed, or unchanged.
+
+Materials that require pressing WebClass's `開始` button are not entered yet. Starting a WebClass material can update usage history and may consume an execution-count limit, so this must be handled conservatively rather than treating every material as safe to start.
 
 Assignment submission is intentionally not included in the first MVP because it has side effects and needs captured/verified WebClass form behavior before automating it.
 
@@ -38,8 +44,16 @@ The dedicated browser profile is also stored under the app config directory so a
 
 ## Download materials
 
+First list courses:
+
 ```sh
-./webclass pull --dir ~/Documents/webclass
+./webclass courses
+```
+
+Then select exactly one course by ID:
+
+```sh
+./webclass pull --dir ~/Documents/webclass <course-id>
 ```
 
 Files are stored below the selected directory by course and material title. The manifest stores stable material identity, file path, size and content hash; it does not store resolved short-lived download URLs.
