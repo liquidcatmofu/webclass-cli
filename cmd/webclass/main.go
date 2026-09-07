@@ -76,11 +76,31 @@ func run(args []string) error {
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
+		if fs.NArg() != 1 {
+			return errors.New("pull requires exactly one course ID; run `webclass courses` to list course IDs")
+		}
+		courseID := fs.Arg(0)
+
 		client, err := webclass.New(*base)
 		if err != nil {
 			return err
 		}
-		result, err := pull.Run(client, *dir)
+		courses, err := client.Courses()
+		if err != nil {
+			return err
+		}
+		var selected *webclass.Course
+		for i := range courses {
+			if courses[i].ID == courseID {
+				selected = &courses[i]
+				break
+			}
+		}
+		if selected == nil {
+			return fmt.Errorf("course %q not found; run `webclass courses` to list course IDs", courseID)
+		}
+
+		result, err := pull.Run(client, *dir, *selected)
 		if err != nil {
 			return err
 		}
@@ -108,7 +128,7 @@ func usageText() string {
 Usage:
   webclass auth [--base-url URL]
   webclass courses [--base-url URL]
-  webclass pull [--base-url URL] [--dir DIR]
+  webclass pull [--base-url URL] [--dir DIR] <course-id>
 
 The default WebClass instance is https://webclass.kosen-k.go.jp/webclass/.
 `
