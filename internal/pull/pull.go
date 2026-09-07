@@ -31,13 +31,24 @@ func Run(client *webclass.Client, root string, course webclass.Course) (Result, 
 	}
 
 	fmt.Printf("Scanning %s (%s)\n", course.Name, course.ID)
-	resources, err := client.Resources(course)
+	resources, stats, err := client.Resources(course)
 	if err != nil {
 		return Result{}, fmt.Errorf("scan %s: %w", course.Name, err)
 	}
-	if len(resources) == 0 {
-		fmt.Fprintln(os.Stderr, "No directly downloadable files found in material entries.")
-		fmt.Fprintln(os.Stderr, "Only entries categorized exactly as 資料 are scanned; start-required materials are not entered yet.")
+	fmt.Printf("Materials: %d, started: %d, downloadable files: %d\n", stats.Materials, stats.Started, len(resources))
+	for _, title := range stats.SkippedLimited {
+		fmt.Fprintf(os.Stderr, "- skip (execution limit): %s\n", title)
+	}
+	for _, title := range stats.SkippedInteractive {
+		fmt.Fprintf(os.Stderr, "- skip (requires input): %s\n", title)
+	}
+	for _, title := range stats.NoFiles {
+		fmt.Fprintf(os.Stderr, "- no downloadable file: %s\n", title)
+	}
+	if stats.Materials == 0 {
+		fmt.Fprintln(os.Stderr, "No entries categorized exactly as 資料 were found.")
+	} else if len(resources) == 0 {
+		fmt.Fprintln(os.Stderr, "No downloadable files were found after applying the safety checks above.")
 	}
 
 	var result Result
