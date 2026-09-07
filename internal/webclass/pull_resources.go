@@ -12,16 +12,24 @@ import (
 
 var locationURLPattern = regexp.MustCompile(`(?i)(?:window\.)?location(?:\.href)?\s*=\s*['\"]([^'\"]+)['\"]`)
 
+type PullItem struct {
+	Group string
+	Title string
+}
+
 type PullResourceStats struct {
 	Documents          int
 	Rows               int
 	Frames             int
 	Categories         map[string]int
+	GroupOrder         []string
+	GroupCategories    map[string]map[string]int
+	ResourceGroups     map[string]string
 	Materials          int
 	Started            int
-	SkippedLimited     []string
-	SkippedInteractive []string
-	NoFiles            []string
+	SkippedLimited     []PullItem
+	SkippedInteractive []PullItem
+	NoFiles            []PullItem
 	ScannedURLs        []string
 }
 
@@ -31,14 +39,17 @@ type PullResourceStats struct {
 // them is part of rendering the course page; links for other content categories
 // are never followed.
 func (c *Client) PullResources(course Course) ([]Resource, PullResourceStats, error) {
-	stats := PullResourceStats{Categories: map[string]int{}}
+	stats := PullResourceStats{
+		Categories:      map[string]int{},
+		GroupCategories: map[string]map[string]int{},
+		ResourceGroups:  map[string]string{},
+	}
 	visited := map[string]bool{}
 	var pages []Resource
 
-	// Course links on the WebClass dashboard point to
-	// /course.php/<id>/login?acs_=... . Visiting that URL establishes the current
-	// course in the WebClass session, but the actual contents list lives at
-	// /course.php/<id>/. Do not try to parse the login endpoint as the course page.
+	// Dashboard links enter a course through /login?acs_=..., while the actual
+	// contents list is /course.php/<id>/. Enter the course first, then parse the
+	// canonical course index URL.
 	indexURL := c.courseIndexURL(course.ID)
 	if course.URL != "" && course.URL != indexURL {
 		resp, err := c.get(course.URL)
@@ -52,21 +63,22 @@ func (c *Client) PullResources(course Course) ([]Resource, PullResourceStats, er
 		return nil, stats, err
 	}
 
-	// A frame tree can expose the same row more than once. Deduplicate by the
-	// resolved material page URL before doing any side-effecting start request.
-	seenPages := map[string]bool{}
+	// A frame tree can expose the same row more than once. Deduplicate by content
+	// ID before any material-start side effect.
+	seenIDs := map[string]bool{}
 	uniquePages := make([]Resource, 0, len(pages))
 	for _, page := range pages {
-		if seenPages[page.PageURL] {
+		if seenIDs[page.ID] {
 			continue
 		}
-		seenPages[page.PageURL] = true
+		seenIDs[page.ID] = true
 		uniquePages = append(uniquePages, page)
 	}
 
 	var out []Resource
 	for _, page := range uniquePages {
-		links, state, err := c.materialDownloadLinks(page.PageURL)
+		group := stats.ResourceGroups[page.ID]
+		links, state, err := c.materialDownloadLinksV2(page.PageURL)
 		if err != nil {
 			return nil, stats, fmt.Errorf("scan resource %q: %w", page.Title, err)
 		}
@@ -74,13 +86,13 @@ func (c *Client) PullResources(course Course) ([]Resource, PullResourceStats, er
 		case "started":
 			stats.Started++
 		case "limited":
-			stats.SkippedLimited = append(stats.SkippedLimited, page.Title)
+			stats.SkippedLimited = append(stats.SkippedLimited, PullItem{Group: group, Title: page.Title})
 			continue
 		case "interactive":
-			stats.SkippedInteractive = append(stats.SkippedInteractive, page.Title)
+			stats.SkippedInteractive = append(stats.SkippedInteractive, PullItem{Group: group, Title: page.Title})
 			continue
 		case "no-files":
-			stats.NoFiles = append(stats.NoFiles, page.Title)
+			stats.NoFiles = append(stats.NoFiles, PullItem{Group: group, Title: page.Title})
 			continue
 		}
 		for _, link := range links {
@@ -114,14 +126,28 @@ func (c *Client) scanCoursePage(course Course, rawURL string, depth int, visited
 	stats.Documents++
 	stats.ScannedURLs = append(stats.ScannedURLs, canonical)
 
+	// Record folder headings even when a folder contains only non-material types.
+	// This lets pull show "課題提出: レポート=..." without opening any report.
+	doc.Find(".cl-contentsList_folder").Each(func(_ int, folder *goquery.Selection) {
+		group := normalizedText(folder.Find(".panel-heading .panel-title").First())
+		if group == "" {
+			return
+		}
+		ensureGroup(stats, group)
+	})
+
 	rows := doc.Find(".cl-contentsList_listGroupItem")
 	stats.Rows += rows.Length()
 	rows.Each(func(_ int, row *goquery.Selection) {
+		group := rowGroup(row)
+		ensureGroup(stats, group)
+
 		category := normalizedText(row.Find(".cl-contentsList_categoryLabel").First())
 		if category == "" {
 			category = "(missing)"
 		}
 		stats.Categories[category]++
+		stats.GroupCategories[group][category]++
 		if category != "資料" {
 			return
 		}
@@ -130,23 +156,38 @@ func (c *Client) scanCoursePage(course Course, rawURL string, depth int, visited
 		nameNode := row.Find(".cm-contentsList_contentName").First()
 		title := normalizedText(nameNode)
 		if title == "" {
+			title = strings.TrimSpace(row.AttrOr("data-contents-name", ""))
+		}
+		if title == "" {
 			title = "material"
 		}
 
 		href := materialHref(row, nameNode)
 		if href == "" {
-			stats.NoFiles = append(stats.NoFiles, title+" (no navigable material link)")
+			stats.NoFiles = append(stats.NoFiles, PullItem{Group: group, Title: title + " (no navigable material link)"})
 			return
 		}
 		u := base.ResolveReference(mustParse(href))
 		if !strings.EqualFold(u.Hostname(), c.Base.Hostname()) {
-			stats.NoFiles = append(stats.NoFiles, title+" (cross-origin material link refused)")
+			stats.NoFiles = append(stats.NoFiles, PullItem{Group: group, Title: title + " (cross-origin material link refused)"})
 			return
 		}
 		pageURL := u.String()
+
+		// WebClass exposes a stable data-contents-id on each course-list row. Use it
+		// instead of the do_contents.php path (which is identical for all materials).
+		contentID := strings.TrimSpace(row.AttrOr("data-contents-id", ""))
+		if contentID == "" {
+			contentID = u.Query().Get("set_contents_id")
+		}
+		if contentID == "" {
+			contentID = stableResourceID(pageURL)
+		}
+		stats.ResourceGroups[contentID] = group
+
 		*pages = append(*pages, Resource{
 			CourseID: course.ID, CourseName: course.Name,
-			ID: stableResourceID(pageURL), Title: title, PageURL: pageURL,
+			ID: contentID, Title: title, PageURL: pageURL,
 		})
 	})
 
@@ -166,12 +207,33 @@ func (c *Client) scanCoursePage(course Course, rawURL string, depth int, visited
 	stats.Frames += len(frames)
 	for _, frame := range frames {
 		if err := c.scanCoursePage(course, frame, depth+1, visited, stats, pages); err != nil {
-			// A decorative/navigation frame failing should not hide rows available in
-			// the rest of the course page. Keep scanning other same-origin frames.
 			continue
 		}
 	}
 	return nil
+}
+
+func ensureGroup(stats *PullResourceStats, group string) {
+	if group == "" {
+		group = "(ungrouped)"
+	}
+	if _, ok := stats.GroupCategories[group]; ok {
+		return
+	}
+	stats.GroupCategories[group] = map[string]int{}
+	stats.GroupOrder = append(stats.GroupOrder, group)
+}
+
+func rowGroup(row *goquery.Selection) string {
+	folder := row.ParentsFiltered(".cl-contentsList_folder").First()
+	if folder.Length() == 0 {
+		return "(ungrouped)"
+	}
+	group := normalizedText(folder.Find(".panel-heading .panel-title").First())
+	if group == "" {
+		return "(ungrouped)"
+	}
+	return group
 }
 
 func normalizedText(s *goquery.Selection) string {
