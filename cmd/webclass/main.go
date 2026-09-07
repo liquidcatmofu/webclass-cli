@@ -30,6 +30,7 @@ func run(args []string) error {
 	case "auth":
 		fs := flag.NewFlagSet("auth", flag.ContinueOnError)
 		base := fs.String("base-url", defaultBaseURL, "WebClass base URL")
+		browser := fs.String("browser", "", "installed Chromium-based browser executable (auto-detected if omitted)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -37,7 +38,7 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		if err := auth.BrowserLogin(context.Background(), u); err != nil {
+		if err := auth.BrowserLogin(context.Background(), u, *browser); err != nil {
 			return err
 		}
 		client, err := webclass.New(*base)
@@ -126,7 +127,7 @@ func usageText() string {
 	return `webclass - CLI client for WebClass
 
 Usage:
-  webclass auth [--base-url URL]
+  webclass auth [--base-url URL] [--browser PATH]
   webclass courses [--base-url URL]
   webclass pull [--base-url URL] [--dir DIR] <course-id>
 
