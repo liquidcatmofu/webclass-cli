@@ -24,39 +24,37 @@ type Result struct {
 
 var invalidFilename = regexp.MustCompile(`[\\/:*?"<>|\x00-\x1f]`)
 
-func Run(client *webclass.Client, root string) (Result, error) {
+func Run(client *webclass.Client, root string, course webclass.Course) (Result, error) {
 	manifest, err := state.Load(root)
 	if err != nil {
 		return Result{}, err
 	}
-	courses, err := client.Courses()
+
+	fmt.Printf("Scanning %s (%s)\n", course.Name, course.ID)
+	resources, err := client.Resources(course)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("scan %s: %w", course.Name, err)
+	}
+	if len(resources) == 0 {
+		fmt.Fprintln(os.Stderr, "No directly downloadable files found in material entries.")
+		fmt.Fprintln(os.Stderr, "Only entries categorized exactly as 資料 are scanned; start-required materials are not entered yet.")
 	}
 
 	var result Result
-	for _, course := range courses {
-		resources, err := client.Resources(course)
+	for _, resource := range resources {
+		status, err := pullOne(client, root, manifest, resource)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "! %s: %v\n", course.Name, err)
+			fmt.Fprintf(os.Stderr, "! %s / %s: %v\n", course.Name, resource.Title, err)
 			result.Failed++
 			continue
 		}
-		for _, resource := range resources {
-			status, err := pullOne(client, root, manifest, resource)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "! %s / %s: %v\n", course.Name, resource.Title, err)
-				result.Failed++
-				continue
-			}
-			switch status {
-			case "new":
-				result.New++
-			case "changed":
-				result.Changed++
-			case "unchanged":
-				result.Unchanged++
-			}
+		switch status {
+		case "new":
+			result.New++
+		case "changed":
+			result.Changed++
+		case "unchanged":
+			result.Unchanged++
 		}
 	}
 	if err := manifest.Save(root); err != nil {
