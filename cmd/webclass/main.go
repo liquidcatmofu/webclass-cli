@@ -74,6 +74,7 @@ func run(args []string) error {
 		fs := flag.NewFlagSet("pull", flag.ContinueOnError)
 		base := fs.String("base-url", defaultBaseURL, "WebClass base URL")
 		dir := fs.String("dir", "webclass", "download directory")
+		groupDirs := fs.Bool("group-dirs", false, "insert WebClass group folders between course and material directories")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -101,7 +102,7 @@ func run(args []string) error {
 			return fmt.Errorf("course %q not found; run `webclass courses` to list course IDs", courseID)
 		}
 
-		result, err := pull.Run(client, *dir, *selected)
+		result, err := pull.Run(client, *dir, *selected, pull.Options{GroupDirs: *groupDirs})
 		if err != nil {
 			return err
 		}
@@ -129,7 +130,7 @@ func usageText() string {
 Usage:
   webclass auth [--base-url URL] [--browser PATH]
   webclass courses [--base-url URL]
-  webclass pull [--base-url URL] [--dir DIR] <course-id>
+  webclass pull [--base-url URL] [--dir DIR] [--group-dirs] <course-id>
 
 The default WebClass instance is https://webclass.kosen-k.go.jp/webclass/.
 `
