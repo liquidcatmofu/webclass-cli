@@ -33,11 +33,6 @@ type PullResourceStats struct {
 	ScannedURLs        []string
 }
 
-// PullResources is the conservative material discovery path used by `pull`.
-// It only follows material links after a row has been positively identified as
-// category "資料". Course-page frames themselves may be scanned because loading
-// them is part of rendering the course page; links for other content categories
-// are never followed.
 func (c *Client) PullResources(course Course) ([]Resource, PullResourceStats, error) {
 	stats := PullResourceStats{
 		Categories:      map[string]int{},
@@ -47,9 +42,6 @@ func (c *Client) PullResources(course Course) ([]Resource, PullResourceStats, er
 	visited := map[string]bool{}
 	var pages []Resource
 
-	// Dashboard links enter a course through /login?acs_=..., while the actual
-	// contents list is /course.php/<id>/. Enter the course first, then parse the
-	// canonical course index URL.
 	indexURL := c.courseIndexURL(course.ID)
 	if course.URL != "" && course.URL != indexURL {
 		resp, err := c.get(course.URL)
@@ -63,8 +55,6 @@ func (c *Client) PullResources(course Course) ([]Resource, PullResourceStats, er
 		return nil, stats, err
 	}
 
-	// A frame tree can expose the same row more than once. Deduplicate by content
-	// ID before any material-start side effect.
 	seenIDs := map[string]bool{}
 	uniquePages := make([]Resource, 0, len(pages))
 	for _, page := range pages {
@@ -126,14 +116,11 @@ func (c *Client) scanCoursePage(course Course, rawURL string, depth int, visited
 	stats.Documents++
 	stats.ScannedURLs = append(stats.ScannedURLs, canonical)
 
-	// Record folder headings even when a folder contains only non-material types.
-	// This lets pull show "課題提出: レポート=..." without opening any report.
 	doc.Find(".cl-contentsList_folder").Each(func(_ int, folder *goquery.Selection) {
 		group := normalizedText(folder.Find(".panel-heading .panel-title").First())
-		if group == "" {
-			return
+		if group != "" {
+			ensureGroup(stats, group)
 		}
-		ensureGroup(stats, group)
 	})
 
 	rows := doc.Find(".cl-contentsList_listGroupItem")
@@ -162,6 +149,14 @@ func (c *Client) scanCoursePage(course Course, rawURL string, depth int, visited
 			title = "material"
 		}
 
+		// A do_contents.php GET can itself enter/start the material. Therefore an
+		// execution-count restriction explicitly shown on the course-list row must
+		// be checked before following the material link.
+		if hasExecutionLimitText(normalizedText(row)) {
+			stats.SkippedLimited = append(stats.SkippedLimited, PullItem{Group: group, Title: title})
+			return
+		}
+
 		href := materialHref(row, nameNode)
 		if href == "" {
 			stats.NoFiles = append(stats.NoFiles, PullItem{Group: group, Title: title + " (no navigable material link)"})
@@ -174,8 +169,6 @@ func (c *Client) scanCoursePage(course Course, rawURL string, depth int, visited
 		}
 		pageURL := u.String()
 
-		// WebClass exposes a stable data-contents-id on each course-list row. Use it
-		// instead of the do_contents.php path (which is identical for all materials).
 		contentID := strings.TrimSpace(row.AttrOr("data-contents-id", ""))
 		if contentID == "" {
 			contentID = u.Query().Get("set_contents_id")
@@ -191,8 +184,6 @@ func (c *Client) scanCoursePage(course Course, rawURL string, depth int, visited
 		})
 	})
 
-	// Scan only the frame tree belonging to the course page. This does not follow
-	// content-list links and therefore cannot enter questionnaires/reports/etc.
 	var frames []string
 	doc.Find("iframe[src], frame[src]").Each(func(_ int, s *goquery.Selection) {
 		src := strings.TrimSpace(s.AttrOr("src", ""))
