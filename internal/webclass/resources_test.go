@@ -1,6 +1,7 @@
 package webclass
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 
@@ -27,6 +28,19 @@ func TestLooksDownloadable(t *testing.T) {
 	}
 	if looksDownloadable("https://example.invalid/course.php/123") {
 		t.Error("course page should not be considered directly downloadable")
+	}
+}
+
+func TestCourseIndexURLDoesNotUseDashboardLoginURL(t *testing.T) {
+	base, err := url.Parse("https://webclass.example/webclass/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{Base: base}
+	got := c.courseIndexURL("02_26036")
+	want := "https://webclass.example/webclass/course.php/02_26036/"
+	if got != want {
+		t.Fatalf("courseIndexURL() = %q, want %q", got, want)
 	}
 }
 
