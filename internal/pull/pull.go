@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,10 +32,11 @@ func Run(client *webclass.Client, root string, course webclass.Course) (Result, 
 	}
 
 	fmt.Printf("Scanning %s (%s)\n", course.Name, course.ID)
-	resources, stats, err := client.Resources(course)
+	resources, stats, err := client.PullResources(course)
 	if err != nil {
 		return Result{}, fmt.Errorf("scan %s: %w", course.Name, err)
 	}
+
 	fmt.Printf("Materials: %d, started: %d, downloadable files: %d\n", stats.Materials, stats.Started, len(resources))
 	for _, title := range stats.SkippedLimited {
 		fmt.Fprintf(os.Stderr, "- skip (execution limit): %s\n", title)
@@ -47,8 +49,18 @@ func Run(client *webclass.Client, root string, course webclass.Course) (Result, 
 	}
 	if stats.Materials == 0 {
 		fmt.Fprintln(os.Stderr, "No entries categorized exactly as 資料 were found.")
-	} else if len(resources) == 0 {
-		fmt.Fprintln(os.Stderr, "No downloadable files were found after applying the safety checks above.")
+		fmt.Fprintf(os.Stderr, "Diagnostic: documents=%d rows=%d frames=%d\n", stats.Documents, stats.Rows, stats.Frames)
+		if len(stats.Categories) > 0 {
+			parts := make([]string, 0, len(stats.Categories))
+			for category, count := range stats.Categories {
+				parts = append(parts, fmt.Sprintf("%s=%d", category, count))
+			}
+			sort.Strings(parts)
+			fmt.Fprintf(os.Stderr, "Diagnostic categories: %s\n", strings.Join(parts, ", "))
+		}
+		for _, u := range stats.ScannedURLs {
+			fmt.Fprintf(os.Stderr, "Diagnostic page: %s\n", u)
+		}
 	}
 
 	var result Result
