@@ -76,7 +76,42 @@ Then select exactly one course by ID:
 ./webclass pull --dir ~/Documents/webclass <course-id>
 ```
 
-Files are stored below the selected directory by course and material title. The manifest stores stable material identity, file path, size and content hash; it does not store resolved short-lived download URLs.
+The default layout is:
+
+```text
+<dir>/<course>/<material>/<file>
+```
+
+To preserve WebClass's folder/group structure, use `--group-dirs`:
+
+```sh
+./webclass pull --group-dirs --dir ~/Documents/webclass <course-id>
+```
+
+This produces:
+
+```text
+<dir>/<course>/<group>/<material>/<file>
+```
+
+For example:
+
+```text
+02_言語解析演習(2026)/
+  達成度試験対策/
+    模範解答（第8回演習問題）/
+      answer.pdf
+  資料/
+    第1回 形式言語，正規言語/
+      slides.pdf
+  演習問題/
+    第1回 演習問題/
+      exercise.pdf
+```
+
+If an existing manifest was created without `--group-dirs`, running with the option later relocates unchanged files into the grouped layout and updates the manifest path rather than treating them as changed downloads.
+
+The manifest stores stable material identity, file path, size and content hash; it does not store resolved short-lived download URLs.
 
 ## Instance override
 
