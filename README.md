@@ -160,7 +160,7 @@ PowerShell:
 webclass.exe completion powershell | Out-String | Invoke-Expression
 ```
 
-Commands and flags are completed directly. Course IDs and material titles are read only from the local `.webclass-manifest.json` under the selected `--dir`; shell completion never contacts WebClass, so repeated Tab presses do not create server load. This also means a course/material that has never appeared in the local manifest may need to be typed manually the first time.
+Commands and flags are completed directly. `webclass courses` caches the returned course IDs under the app config directory, and `pull` refreshes the same cache when it fetches the course list. Course-ID completion reads that cache, while material-title completion reads the local `.webclass-manifest.json` under the selected `--dir`. Shell completion itself never contacts WebClass, so repeated Tab presses do not create server load. After upgrading from an older version, run `webclass courses` once to populate all course IDs even for courses that have never been pulled.
 
 ## Instance override
 
