@@ -40,12 +40,12 @@ func Run(client *webclass.Client, root string, course webclass.Course, options O
 	}
 
 	fmt.Printf("Scanning %s (%s)\n", course.Name, course.ID)
-	resources, stats, err := client.PullResources(course)
+	materials, stats, err := client.PullPlan(course)
 	if err != nil {
 		return Result{}, fmt.Errorf("scan %s: %w", course.Name, err)
 	}
 
-	fmt.Printf("Materials: %d, started: %d, downloadable files: %d\n", stats.Materials, stats.Started, len(resources))
+	fmt.Printf("Materials: %d, candidates: %d\n", stats.Materials, len(materials))
 	printGroupOverview(stats)
 	printGroupedIssues(stats)
 
@@ -66,9 +66,18 @@ func Run(client *webclass.Client, root string, course webclass.Course, options O
 	}
 
 	var result Result
+	started, closed, downloadable := 0, 0, 0
 	currentGroup := ""
-	for _, resource := range resources {
-		group := stats.ResourceGroups[resource.ID]
+
+	stop := func(cause error) (Result, error) {
+		if saveErr := manifest.Save(root); saveErr != nil {
+			return result, fmt.Errorf("%v; additionally failed to save manifest: %w", cause, saveErr)
+		}
+		return result, cause
+	}
+
+	for i, material := range materials {
+		group := stats.ResourceGroups[material.ID]
 		if group == "" {
 			group = "(ungrouped)"
 		}
@@ -76,25 +85,64 @@ func Run(client *webclass.Client, root string, course webclass.Course, options O
 			fmt.Printf("\n[%s]\n", group)
 			currentGroup = group
 		}
+		fmt.Printf("  [%d/%d] %s\n", i+1, len(materials), material.Title)
 
-		status, err := pullOne(client, root, manifest, resource, group, options)
+		session, err := client.OpenMaterialSession(material.PageURL)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  ! %s: %v\n", resource.Title, err)
 			result.Failed++
-			continue
+			return stop(fmt.Errorf("open material %q: %w; refusing to open another material because close state is unknown", material.Title, err))
 		}
-		switch status {
-		case "new":
-			result.New++
-		case "changed":
-			result.Changed++
-		case "unchanged":
-			result.Unchanged++
+		if session.Started {
+			started++
+		}
+
+		switch session.State {
+		case "limited":
+			fmt.Fprintln(os.Stderr, "    - skip (execution limit)")
+		case "interactive":
+			fmt.Fprintln(os.Stderr, "    - skip (requires input)")
+		case "no-files":
+			fmt.Fprintln(os.Stderr, "    - no downloadable file")
+		default:
+			downloadable += len(session.Links)
+			for _, link := range session.Links {
+				resource := material
+				resource.DownloadURL = link
+				status, err := pullOne(client, root, manifest, resource, group, options)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "    ! download: %v\n", err)
+					result.Failed++
+					continue
+				}
+				switch status {
+				case "new":
+					result.New++
+				case "changed":
+					result.Changed++
+				case "unchanged":
+					result.Unchanged++
+				}
+			}
+		}
+
+		if session.Started {
+			if session.Close == nil {
+				result.Failed++
+				return stop(fmt.Errorf("material %q was started but no recognized close action was found; refusing to open the next material", material.Title))
+			}
+			if err := client.CloseMaterial(session.Close); err != nil {
+				result.Failed++
+				return stop(fmt.Errorf("close material %q: %w; refusing to open the next material", material.Title, err))
+			}
+			closed++
+			fmt.Println("    closed")
 		}
 	}
+
 	if err := manifest.Save(root); err != nil {
 		return result, err
 	}
+	fmt.Printf("\nProcessed %d/%d candidates; started %d, closed %d, downloadable files %d\n", len(materials), len(materials), started, closed, downloadable)
 	return result, nil
 }
 
@@ -216,17 +264,17 @@ func pullOne(client *webclass.Client, root string, manifest *state.Manifest, res
 			}
 			manifest.Entries[key] = old
 			if renamedOpaque || oldKey != key {
-				fmt.Printf("  = %s (renamed)\n", rel)
+				fmt.Printf("    = %s (renamed)\n", rel)
 			} else if pathChanged {
-				fmt.Printf("  = %s (relocated)\n", rel)
+				fmt.Printf("    = %s (relocated)\n", rel)
 			} else {
-				fmt.Printf("  = %s (restored)\n", rel)
+				fmt.Printf("    = %s (restored)\n", rel)
 			}
 			return "unchanged", nil
 		}
 
 		os.Remove(tmpName)
-		fmt.Printf("  = %s\n", rel)
+		fmt.Printf("    = %s\n", rel)
 		return "unchanged", nil
 	}
 
@@ -249,7 +297,7 @@ func pullOne(client *webclass.Client, root string, manifest *state.Manifest, res
 		ResourceID: resource.ID, ResourceTitle: resource.Title,
 		Filename: filename, Path: rel, SHA256: hash, Size: n, UpdatedAt: time.Now(),
 	}
-	fmt.Printf("  %s %s\n", prefix, rel)
+	fmt.Printf("    %s %s\n", prefix, rel)
 	return status, nil
 }
 
