@@ -124,6 +124,7 @@ func courseCandidates(dir, prefix string) []string {
 			if course.ID != "" {
 				seen[course.ID] = true
 			}
+		}
 	}
 
 	// Keep manifest IDs as a fallback for users who have not run the newer
