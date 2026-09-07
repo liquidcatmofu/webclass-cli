@@ -33,7 +33,10 @@ type PullResourceStats struct {
 	ScannedURLs        []string
 }
 
-func (c *Client) PullResources(course Course) ([]Resource, PullResourceStats, error) {
+// PullPlan reads only the course/index pages and builds a list of material
+// entries that are safe candidates for pull. It deliberately does not enter or
+// start any material; callers must process the returned entries one at a time.
+func (c *Client) PullPlan(course Course) ([]Resource, PullResourceStats, error) {
 	stats := PullResourceStats{
 		Categories:      map[string]int{},
 		GroupCategories: map[string]map[string]int{},
@@ -64,34 +67,7 @@ func (c *Client) PullResources(course Course) ([]Resource, PullResourceStats, er
 		seenIDs[page.ID] = true
 		uniquePages = append(uniquePages, page)
 	}
-
-	var out []Resource
-	for _, page := range uniquePages {
-		group := stats.ResourceGroups[page.ID]
-		links, state, err := c.materialDownloadLinksV2(page.PageURL)
-		if err != nil {
-			return nil, stats, fmt.Errorf("scan resource %q: %w", page.Title, err)
-		}
-		switch state {
-		case "started":
-			stats.Started++
-		case "limited":
-			stats.SkippedLimited = append(stats.SkippedLimited, PullItem{Group: group, Title: page.Title})
-			continue
-		case "interactive":
-			stats.SkippedInteractive = append(stats.SkippedInteractive, PullItem{Group: group, Title: page.Title})
-			continue
-		case "no-files":
-			stats.NoFiles = append(stats.NoFiles, PullItem{Group: group, Title: page.Title})
-			continue
-		}
-		for _, link := range links {
-			r := page
-			r.DownloadURL = link
-			out = append(out, r)
-		}
-	}
-	return out, stats, nil
+	return uniquePages, stats, nil
 }
 
 func (c *Client) courseIndexURL(courseID string) string {
