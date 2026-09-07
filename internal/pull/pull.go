@@ -239,6 +239,7 @@ func printGroupedIssues(stats webclass.PullResourceStats) {
 			if item.Group == group {
 				lines = append(lines, "skip (requires input): "+item.Title)
 			}
+		}
 		for _, item := range stats.NoFiles {
 			if item.Group == group {
 				lines = append(lines, "no downloadable file: "+item.Title)
