@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/liquidcatmofu/webclass-cli/internal/cache"
 	"github.com/liquidcatmofu/webclass-cli/internal/state"
 )
 
@@ -24,8 +25,9 @@ func completionScript(shell string) (string, error) {
 }
 
 // completionCandidates is intentionally local-only. Shell completion must not
-// turn repeated Tab presses into WebClass requests. Course and material names
-// are learned from the manifest produced by previous pulls.
+// turn repeated Tab presses into WebClass requests. Course IDs are cached by
+// `courses` (and refreshed by pull); material names come from the download
+// manifest produced by previous pulls.
 func completionCandidates(words []string) []string {
 	if len(words) == 0 {
 		return []string{"auth", "courses", "pull", "completion", "help"}
@@ -74,7 +76,7 @@ func completionCandidates(words []string) []string {
 	}
 
 	if completionCourse(before[1:]) == "" {
-		return manifestCourses(completionDir(before[1:]), current)
+		return courseCandidates(completionDir(before[1:]), current)
 	}
 	return nil
 }
@@ -115,20 +117,29 @@ func completionCourse(words []string) string {
 	return ""
 }
 
-func manifestCourses(dir, prefix string) []string {
-	manifest, err := state.Load(dir)
-	if err != nil {
-		return nil
-	}
+func courseCandidates(dir, prefix string) []string {
 	seen := map[string]bool{}
-	for _, entry := range manifest.Entries {
-		if entry.CourseID != "" {
-			seen[entry.CourseID] = true
+	if courses, err := cache.LoadCourses(); err == nil {
+		for _, course := range courses {
+			if course.ID != "" {
+				seen[course.ID] = true
+			}
+	}
+
+	// Keep manifest IDs as a fallback for users who have not run the newer
+	// `courses` command since upgrading.
+	if manifest, err := state.Load(dir); err == nil {
+		for _, entry := range manifest.Entries {
+			if entry.CourseID != "" {
+				seen[entry.CourseID] = true
+			}
 		}
 	}
+
 	out := make([]string, 0, len(seen))
+	lowPrefix := strings.ToLower(prefix)
 	for id := range seen {
-		if strings.HasPrefix(strings.ToLower(id), strings.ToLower(prefix)) {
+		if strings.HasPrefix(strings.ToLower(id), lowPrefix) {
 			out = append(out, id)
 		}
 	}
