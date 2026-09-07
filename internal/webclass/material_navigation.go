@@ -60,6 +60,9 @@ func (c *Client) materialDownloadLinksV2(pageURL string) ([]string, string, erro
 		// do_contents.php commonly returns a tiny document whose only purpose is
 		// assigning window.top.location.href to the real WebClass content frame.
 		if next := automaticNavigationURL(doc, base, c.Base.Hostname()); next != "" && !visitedPages[next] {
+			if strings.HasSuffix(strings.ToLower(base.Path), "/do_contents.php") {
+				started = true
+			}
 			current = next
 			doc = nil
 			base = nil
@@ -96,6 +99,23 @@ func (c *Client) materialDownloadLinksV2(pageURL string) ([]string, string, erro
 	}
 
 	return nil, "no-files", nil
+}
+
+func hasExecutionLimitText(text string) bool {
+	text = strings.Join(strings.Fields(text), " ")
+	if !strings.Contains(text, "実行回数") && !strings.Contains(text, "回数制限") {
+		return false
+	}
+	if strings.Contains(text, "実行回数 無制限") ||
+		strings.Contains(text, "実行回数：無制限") ||
+		strings.Contains(text, "実行回数: 無制限") ||
+		strings.Contains(text, "実行回数の制限 なし") ||
+		strings.Contains(text, "実行回数の制限：なし") ||
+		strings.Contains(text, "回数制限 なし") ||
+		strings.Contains(text, "回数制限：なし") {
+		return false
+	}
+	return executionLimitPattern.MatchString(text) || strings.Contains(text, "回数制限あり") || strings.Contains(text, "回数制限：あり")
 }
 
 func automaticNavigationURL(doc *goquery.Document, base *url.URL, host string) string {
