@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,7 +28,10 @@ type Options struct {
 	GroupDirs bool
 }
 
-var invalidFilename = regexp.MustCompile(`[\\/:*?"<>|\x00-\x1f]`)
+var (
+	invalidFilename   = regexp.MustCompile(`[\\/:*?"<>|\x00-\x1f]`)
+	opaquePDFFilename = regexp.MustCompile(`(?i)^[0-9a-f]{16,64}\.pdf$`)
+)
 
 func Run(client *webclass.Client, root string, course webclass.Course, options Options) (Result, error) {
 	manifest, err := state.Load(root)
@@ -149,10 +153,7 @@ func pullOne(client *webclass.Client, root string, manifest *state.Manifest, res
 	}
 	defer dl.Body.Close()
 
-	filename := sanitize(dl.Filename)
-	if filename == "" || filename == "download" {
-		filename = sanitize(resource.Title)
-	}
+	filename, renamedOpaque := downloadFilename(resource, dl)
 	rel := resourcePath(resource, group, filename, options)
 	dst := filepath.Join(root, rel)
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
@@ -178,6 +179,17 @@ func pullOne(client *webclass.Client, root string, manifest *state.Manifest, res
 	hash := hex.EncodeToString(h.Sum(nil))
 	key := resource.CourseID + "|" + resource.ID + "|" + filename
 	old, exists := manifest.Entries[key]
+	oldKey := key
+
+	// Older versions used WebClass's opaque internal PDF basename for textbook
+	// bodies (for example b0b6db7f1cf1e354.pdf). If this pull replaces that
+	// basename with the material title, migrate the matching manifest entry
+	// instead of treating the same bytes as a second file.
+	if !exists && renamedOpaque {
+		if migratedKey, migratedEntry, ok := findOpaqueManifestEntry(manifest, resource, hash); ok {
+			oldKey, old, exists = migratedKey, migratedEntry, true
+		}
+	}
 
 	if exists && old.SHA256 == hash {
 		_, statErr := os.Stat(dst)
@@ -187,7 +199,7 @@ func pullOne(client *webclass.Client, root string, manifest *state.Manifest, res
 			return "", statErr
 		}
 
-		if pathChanged || missing {
+		if pathChanged || missing || oldKey != key {
 			if err := replaceFile(tmpName, dst); err != nil {
 				return "", err
 			}
@@ -196,10 +208,16 @@ func pullOne(client *webclass.Client, root string, manifest *state.Manifest, res
 			}
 			old.CourseName = resource.CourseName
 			old.ResourceTitle = resource.Title
+			old.Filename = filename
 			old.Path = rel
 			old.Size = n
+			if oldKey != key {
+				delete(manifest.Entries, oldKey)
+			}
 			manifest.Entries[key] = old
-			if pathChanged {
+			if renamedOpaque || oldKey != key {
+				fmt.Printf("  = %s (renamed)\n", rel)
+			} else if pathChanged {
 				fmt.Printf("  = %s (relocated)\n", rel)
 			} else {
 				fmt.Printf("  = %s (restored)\n", rel)
@@ -223,6 +241,9 @@ func pullOne(client *webclass.Client, root string, manifest *state.Manifest, res
 	if exists && filepath.Clean(old.Path) != filepath.Clean(rel) {
 		removeOldPath(root, old.Path, rel)
 	}
+	if oldKey != key {
+		delete(manifest.Entries, oldKey)
+	}
 	manifest.Entries[key] = state.Entry{
 		CourseID: resource.CourseID, CourseName: resource.CourseName,
 		ResourceID: resource.ID, ResourceTitle: resource.Title,
@@ -230,6 +251,51 @@ func pullOne(client *webclass.Client, root string, manifest *state.Manifest, res
 	}
 	fmt.Printf("  %s %s\n", prefix, rel)
 	return status, nil
+}
+
+func downloadFilename(resource webclass.Resource, dl *webclass.Download) (string, bool) {
+	filename := sanitize(dl.Filename)
+	if filename == "" || filename == "download" {
+		filename = sanitize(resource.Title)
+	}
+
+	// Attachments expose their real filename through file_name on file_down.php
+	// and/or download.php. Preserve it even when it happens to look opaque.
+	// Textbook-body PDFs do not expose an original filename; WebClass stores them
+	// under an internal hexadecimal basename. Give those files the material title.
+	if opaquePDFFilename.MatchString(filename) &&
+		!hasFileNameParameter(resource.DownloadURL) &&
+		!hasFileNameParameter(dl.URL) {
+		title := sanitize(resource.Title)
+		if title != "" && title != "resource" {
+			if !strings.HasSuffix(strings.ToLower(title), ".pdf") {
+				title += ".pdf"
+			}
+			return title, true
+		}
+	}
+
+	return filename, false
+}
+
+func hasFileNameParameter(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(u.Query().Get("file_name")) != ""
+}
+
+func findOpaqueManifestEntry(manifest *state.Manifest, resource webclass.Resource, hash string) (string, state.Entry, bool) {
+	for key, entry := range manifest.Entries {
+		if entry.CourseID != resource.CourseID || entry.ResourceID != resource.ID || entry.SHA256 != hash {
+			continue
+		}
+		if opaquePDFFilename.MatchString(entry.Filename) {
+			return key, entry, true
+		}
+	}
+	return "", state.Entry{}, false
 }
 
 func resourcePath(resource webclass.Resource, group, filename string, options Options) string {
