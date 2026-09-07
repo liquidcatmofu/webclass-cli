@@ -23,9 +23,13 @@ type Result struct {
 	Failed    int
 }
 
+type Options struct {
+	GroupDirs bool
+}
+
 var invalidFilename = regexp.MustCompile(`[\\/:*?"<>|\x00-\x1f]`)
 
-func Run(client *webclass.Client, root string, course webclass.Course) (Result, error) {
+func Run(client *webclass.Client, root string, course webclass.Course, options Options) (Result, error) {
 	manifest, err := state.Load(root)
 	if err != nil {
 		return Result{}, err
@@ -69,7 +73,7 @@ func Run(client *webclass.Client, root string, course webclass.Course) (Result, 
 			currentGroup = group
 		}
 
-		status, err := pullOne(client, root, manifest, resource)
+		status, err := pullOne(client, root, manifest, resource, group, options)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  ! %s: %v\n", resource.Title, err)
 			result.Failed++
@@ -138,7 +142,7 @@ func printGroupedIssues(stats webclass.PullResourceStats) {
 	}
 }
 
-func pullOne(client *webclass.Client, root string, manifest *state.Manifest, resource webclass.Resource) (string, error) {
+func pullOne(client *webclass.Client, root string, manifest *state.Manifest, resource webclass.Resource, group string, options Options) (string, error) {
 	dl, err := client.OpenDownload(resource.DownloadURL)
 	if err != nil {
 		return "", err
@@ -149,15 +153,7 @@ func pullOne(client *webclass.Client, root string, manifest *state.Manifest, res
 	if filename == "" || filename == "download" {
 		filename = sanitize(resource.Title)
 	}
-	courseDir := sanitize(resource.CourseName)
-	resourceDir := sanitize(resource.Title)
-	if courseDir == "" {
-		courseDir = resource.CourseID
-	}
-	if resourceDir == "" {
-		resourceDir = "resource"
-	}
-	rel := filepath.Join(courseDir, resourceDir, filename)
+	rel := resourcePath(resource, group, filename, options)
 	dst := filepath.Join(root, rel)
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return "", err
@@ -182,18 +178,50 @@ func pullOne(client *webclass.Client, root string, manifest *state.Manifest, res
 	hash := hex.EncodeToString(h.Sum(nil))
 	key := resource.CourseID + "|" + resource.ID + "|" + filename
 	old, exists := manifest.Entries[key]
+
+	if exists && old.SHA256 == hash {
+		_, statErr := os.Stat(dst)
+		pathChanged := filepath.Clean(old.Path) != filepath.Clean(rel)
+		missing := os.IsNotExist(statErr)
+		if statErr != nil && !missing {
+			return "", statErr
+		}
+
+		if pathChanged || missing {
+			if err := replaceFile(tmpName, dst); err != nil {
+				return "", err
+			}
+			if pathChanged {
+				removeOldPath(root, old.Path, rel)
+			}
+			old.CourseName = resource.CourseName
+			old.ResourceTitle = resource.Title
+			old.Path = rel
+			old.Size = n
+			manifest.Entries[key] = old
+			if pathChanged {
+				fmt.Printf("  = %s (relocated)\n", rel)
+			} else {
+				fmt.Printf("  = %s (restored)\n", rel)
+			}
+			return "unchanged", nil
+		}
+
+		os.Remove(tmpName)
+		fmt.Printf("  = %s\n", rel)
+		return "unchanged", nil
+	}
+
 	status := "new"
 	prefix := "+"
 	if exists {
-		if old.SHA256 == hash {
-			os.Remove(tmpName)
-			fmt.Printf("  = %s\n", rel)
-			return "unchanged", nil
-		}
 		status, prefix = "changed", "!"
 	}
-	if err := os.Rename(tmpName, dst); err != nil {
+	if err := replaceFile(tmpName, dst); err != nil {
 		return "", err
+	}
+	if exists && filepath.Clean(old.Path) != filepath.Clean(rel) {
+		removeOldPath(root, old.Path, rel)
 	}
 	manifest.Entries[key] = state.Entry{
 		CourseID: resource.CourseID, CourseName: resource.CourseName,
@@ -202,6 +230,41 @@ func pullOne(client *webclass.Client, root string, manifest *state.Manifest, res
 	}
 	fmt.Printf("  %s %s\n", prefix, rel)
 	return status, nil
+}
+
+func resourcePath(resource webclass.Resource, group, filename string, options Options) string {
+	courseDir := sanitize(resource.CourseName)
+	resourceDir := sanitize(resource.Title)
+	if courseDir == "" {
+		courseDir = resource.CourseID
+	}
+	if resourceDir == "" {
+		resourceDir = "resource"
+	}
+
+	parts := []string{courseDir}
+	if options.GroupDirs {
+		groupDir := sanitize(group)
+		if groupDir != "" && group != "(ungrouped)" {
+			parts = append(parts, groupDir)
+		}
+	}
+	parts = append(parts, resourceDir, filename)
+	return filepath.Join(parts...)
+}
+
+func replaceFile(tmpName, dst string) error {
+	if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(tmpName, dst)
+}
+
+func removeOldPath(root, oldRel, newRel string) {
+	if oldRel == "" || filepath.Clean(oldRel) == filepath.Clean(newRel) {
+		return
+	}
+	_ = os.Remove(filepath.Join(root, oldRel))
 }
 
 func sanitize(name string) string {
