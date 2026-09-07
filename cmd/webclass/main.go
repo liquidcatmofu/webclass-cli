@@ -166,7 +166,8 @@ Usage:
   webclass pull [--base-url URL] [--dir DIR] [--group-dirs] [--interval DURATION] [--material NAME] <course-id>
   webclass completion bash|zsh|fish|powershell
 
-The default WebClass instance is https://webclass.kosen-k.go.jp/webclass/.
+Works with WebClass instances that expose compatible WebClass 12.x HTML flows.
+The current fallback base URL is https://webclass.kosen-k.go.jp/webclass/ for backward compatibility; use --base-url for another instance.
 Pull defaults to a 1s quiet interval between WebClass HTTP requests and never sends concurrent requests.
 Shell completion never accesses WebClass; course IDs come from the last courses/pull cache and material names come from the local manifest.
 `
