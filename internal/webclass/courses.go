@@ -38,7 +38,7 @@ func (c *Client) Courses() ([]Course, error) {
 		if len(m) != 2 || seen[m[1]] {
 			return
 		}
-		name := strings.Join(strings.Fields(s.Text()), " ")
+		name := cleanCourseName(s.Text())
 		if name == "" {
 			name = m[1]
 		}
@@ -49,6 +49,13 @@ func (c *Client) Courses() ([]Course, error) {
 		return nil, fmt.Errorf("no courses found; the WebClass dashboard layout may have changed")
 	}
 	return courses, nil
+}
+
+func cleanCourseName(raw string) string {
+	name := strings.Join(strings.Fields(raw), " ")
+	name = strings.TrimSpace(strings.TrimPrefix(name, "»"))
+	name = strings.TrimSpace(strings.TrimSuffix(name, "締切が近い課題があります。"))
+	return name
 }
 
 func mustParse(raw string) *url.URL {
