@@ -111,6 +111,8 @@ For example:
 
 If an existing manifest was created without `--group-dirs`, running with the option later relocates unchanged files into the grouped layout and updates the manifest path rather than treating them as changed downloads.
 
+WebClass handles textbook-body PDFs and downloadable attachments differently. Attachments expose their original filename through `file_name`, so that name is preserved. A textbook-body PDF may only expose an internal hexadecimal storage basename such as `b0b6db7f1cf1e354.pdf`; when no explicit `file_name` exists, the CLI names that PDF after the WebClass material title instead. Existing manifest entries using the old opaque basename are migrated by matching the same material ID and SHA-256 hash.
+
 The manifest stores stable material identity, file path, size and content hash; it does not store resolved short-lived download URLs.
 
 ## Instance override
