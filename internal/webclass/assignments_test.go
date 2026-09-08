@@ -37,9 +37,10 @@ func TestAssignmentsReadsCourseAndScoresWithoutOpeningContents(t *testing.T) {
 	mux.HandleFunc("/webclass/course.php/C1/scores", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(`<table id="PersonalScoreSheet">
-<tr><th class="contents-title">レポート1</th><td>未</td></tr>
-<tr><th class="contents-title">確認テスト</th><td>8</td></tr>
-<tr><th class="contents-title">再提出レポート</th><td>10</td></tr>
+<tr><th>教材</th><th>得点</th><th>配点</th></tr>
+<tr><th class="contents-title">レポート1</th><td>未</td><td>10</td></tr>
+<tr><th class="contents-title">確認テスト</th><td>8</td><td>10</td></tr>
+<tr><th class="contents-title">再提出レポート</th><td>10</td><td>10</td></tr>
 </table>`))
 	})
 	mux.HandleFunc("/webclass/do_contents.php", func(w http.ResponseWriter, r *http.Request) {
@@ -71,11 +72,34 @@ func TestAssignmentsReadsCourseAndScoresWithoutOpeningContents(t *testing.T) {
 	if got[0].Title != "確認テスト" || got[0].DeadlineText != "2026/09/10 18:30" || got[0].SubmissionStatus != SubmissionSubmitted {
 		t.Fatalf("first assignment = %#v", got[0])
 	}
+	if !got[0].HasScore || got[0].Score != 8 || !got[0].HasMaxScore || got[0].MaxScore != 10 {
+		t.Fatalf("first assignment score = %#v", got[0])
+	}
 	if got[1].Title != "レポート1" || got[1].DeadlineText != "2026/09/12 23:59" || got[1].SubmissionStatus != SubmissionPending {
 		t.Fatalf("second assignment = %#v", got[1])
 	}
+	if got[1].HasScore || !got[1].HasMaxScore || got[1].MaxScore != 10 {
+		t.Fatalf("pending assignment score = %#v", got[1])
+	}
 	if got[2].Title != "再提出レポート" || got[2].SubmissionStatus != SubmissionResubmit {
 		t.Fatalf("third assignment = %#v", got[2])
+	}
+}
+
+func TestParseAssignmentScore(t *testing.T) {
+	paired := parseAssignmentScore("8 / 10")
+	if !paired.Submitted || !paired.HasScore || paired.Score != 8 || !paired.HasMaxScore || paired.MaxScore != 10 {
+		t.Fatalf("paired score = %#v", paired)
+	}
+
+	single := parseAssignmentScore("7.5点")
+	if !single.Submitted || !single.HasScore || single.Score != 7.5 || single.HasMaxScore {
+		t.Fatalf("single score = %#v", single)
+	}
+
+	pending := parseAssignmentScore("未")
+	if pending.Submitted || pending.HasScore || pending.HasMaxScore {
+		t.Fatalf("pending score = %#v", pending)
 	}
 }
 
