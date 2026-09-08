@@ -26,17 +26,18 @@ func completionScript(shell string) (string, error) {
 
 // completionCandidates is intentionally local-only. Shell completion must not
 // turn repeated Tab presses into WebClass requests. Course IDs are cached by
-// `courses` (and refreshed by pull); material names come from the download
+// commands that read the dashboard; material names come from the download
 // manifest produced by previous pulls.
 func completionCandidates(words []string) []string {
+	commands := []string{"auth", "courses", "assignments", "pull", "completion", "help"}
 	if len(words) == 0 {
-		return []string{"auth", "courses", "pull", "completion", "help"}
+		return commands
 	}
 
 	current := words[len(words)-1]
 	before := words[:len(words)-1]
 	if len(before) == 0 {
-		return prefixCandidates(current, []string{"auth", "courses", "pull", "completion", "help"})
+		return prefixCandidates(current, commands)
 	}
 
 	command := before[0]
@@ -50,6 +51,8 @@ func completionCandidates(words []string) []string {
 		flags = []string{"--base-url", "--browser"}
 	case "courses":
 		flags = []string{"--base-url"}
+	case "assignments":
+		flags = []string{"--base-url", "--interval"}
 	case "pull":
 		flags = []string{"--base-url", "--dir", "--group-dirs", "--interval", "--material", "--mode"}
 	default:
@@ -61,6 +64,19 @@ func completionCandidates(words []string) []string {
 	}
 	if strings.HasPrefix(current, "-") {
 		return prefixCandidates(current, flags)
+	}
+
+	if command == "assignments" {
+		if len(before) > 0 {
+			prev := before[len(before)-1]
+			if prev == "--base-url" || prev == "--interval" {
+				return nil
+			}
+		}
+		if completionCourse(before[1:]) == "" {
+			return courseCandidates("webclass", current)
+		}
+		return nil
 	}
 	if command != "pull" {
 		return nil
