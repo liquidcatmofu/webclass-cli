@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,11 +30,32 @@ type Assignment struct {
 	HasDeadline      bool
 	DeadlineText     string
 	SubmissionStatus SubmissionStatus
+	ScoreText        string
+	Score            float64
+	MaxScore         float64
+	HasScore         bool
+	HasMaxScore      bool
+}
+
+type assignmentScore struct {
+	Submitted   bool
+	Raw         string
+	Score       float64
+	MaxScore    float64
+	HasScore    bool
+	HasMaxScore bool
+}
+
+type scoreColumns struct {
+	Score int
+	Max   int
 }
 
 var (
 	assignmentDeadlinePattern = regexp.MustCompile(`締め切り[：:]\s*(\d{4})/(\d{2})/(\d{2})\s+(\d{2}):(\d{2})`)
 	assignmentRangePattern    = regexp.MustCompile(`\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}\s*-\s*(\d{4})/(\d{2})/(\d{2})\s+(\d{2}):(\d{2})`)
+	scorePairPattern          = regexp.MustCompile(`^\s*(-?\d+(?:\.\d+)?)\s*(?:点)?\s*/\s*(-?\d+(?:\.\d+)?)\s*(?:点)?\s*$`)
+	scoreNumberPattern        = regexp.MustCompile(`^\s*(-?\d+(?:\.\d+)?)\s*(?:点)?\s*$`)
 )
 
 // Assignments reads a course's contents list and score sheet without opening
@@ -53,7 +75,7 @@ func (c *Client) Assignments(course Course) ([]Assignment, error) {
 		return nil, fmt.Errorf("read course %s: %w", course.ID, err)
 	}
 
-	scores, scoresAvailable, err := c.assignmentSubmissionStatus(course.ID)
+	scores, scoresAvailable, err := c.assignmentScores(course.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -76,12 +98,13 @@ func (c *Client) Assignments(course Course) ([]Assignment, error) {
 
 		id := strings.TrimSpace(row.AttrOr("data-contents-id", ""))
 		deadline, hasDeadline, deadlineText := assignmentDeadline(row)
+		score, hasScoreRecord := scores[title]
 
 		status := SubmissionUnknown
 		if assignmentNeedsResubmit(row) {
 			status = SubmissionResubmit
-		} else if submitted, ok := scores[title]; ok {
-			if submitted {
+		} else if hasScoreRecord {
+			if score.Submitted {
 				status = SubmissionSubmitted
 			} else {
 				status = SubmissionPending
@@ -99,6 +122,8 @@ func (c *Client) Assignments(course Course) ([]Assignment, error) {
 			Title: title, Category: category,
 			Deadline: deadline, HasDeadline: hasDeadline, DeadlineText: deadlineText,
 			SubmissionStatus: status,
+			ScoreText: score.Raw, Score: score.Score, MaxScore: score.MaxScore,
+			HasScore: score.HasScore, HasMaxScore: score.HasMaxScore,
 		})
 	})
 
@@ -106,7 +131,7 @@ func (c *Client) Assignments(course Course) ([]Assignment, error) {
 	return assignments, nil
 }
 
-func (c *Client) assignmentSubmissionStatus(courseID string) (map[string]bool, bool, error) {
+func (c *Client) assignmentScores(courseID string) (map[string]assignmentScore, bool, error) {
 	scoresURL := c.Base.ResolveReference(mustParse("course.php/" + courseID + "/scores")).String()
 	doc, _, err := c.document(scoresURL)
 	if err != nil {
@@ -114,25 +139,111 @@ func (c *Client) assignmentSubmissionStatus(courseID string) (map[string]bool, b
 			return nil, false, err
 		}
 		// Some WebClass installations may not expose this page. Listing the
-		// assignments is still useful; submission state will be unknown.
-		return map[string]bool{}, false, nil
+		// assignments is still useful; submission/score state will be unknown.
+		return map[string]assignmentScore{}, false, nil
 	}
 
 	table := doc.Find("#PersonalScoreSheet").First()
 	if table.Length() == 0 {
-		return map[string]bool{}, false, nil
+		return map[string]assignmentScore{}, false, nil
 	}
 
-	result := map[string]bool{}
+	columns := detectScoreColumns(table)
+	result := map[string]assignmentScore{}
 	table.Find("tr").Each(func(_ int, row *goquery.Selection) {
 		title := normalizedText(row.Find(".contents-title").First())
 		if title == "" {
 			return
 		}
-		score := normalizedText(row.Find("td").First())
-		result[title] = score != "" && score != "未"
+
+		rawScore := cellTextAt(row, columns.Score)
+		if rawScore == "" {
+			rawScore = normalizedText(row.Find("td").First())
+		}
+		record := parseAssignmentScore(rawScore)
+
+		if columns.Max >= 0 && columns.Max != columns.Score {
+			if rawMax := cellTextAt(row, columns.Max); rawMax != "" {
+				if max, ok := parseSingleScore(rawMax); ok {
+					record.MaxScore = max
+					record.HasMaxScore = true
+				}
+			}
+		}
+		result[title] = record
 	})
 	return result, true, nil
+}
+
+func detectScoreColumns(table *goquery.Selection) scoreColumns {
+	columns := scoreColumns{Score: -1, Max: -1}
+	table.Find("tr").EachWithBreak(func(_ int, row *goquery.Selection) bool {
+		cells := row.ChildrenFiltered("th, td")
+		rowScore, rowMax := -1, -1
+		cells.Each(func(i int, cell *goquery.Selection) {
+			text := normalizedText(cell)
+			if rowScore < 0 && isScoreHeader(text) {
+				rowScore = i
+			}
+			if rowMax < 0 && isMaxScoreHeader(text) {
+				rowMax = i
+			}
+		})
+		if rowScore >= 0 || rowMax >= 0 {
+			columns.Score, columns.Max = rowScore, rowMax
+			return false
+		}
+		return true
+	})
+	return columns
+}
+
+func isScoreHeader(text string) bool {
+	compact := strings.ToLower(strings.Join(strings.Fields(text), ""))
+	return strings.Contains(compact, "得点") || strings.Contains(compact, "点数") || compact == "score" || strings.HasPrefix(compact, "score/")
+}
+
+func isMaxScoreHeader(text string) bool {
+	compact := strings.ToLower(strings.Join(strings.Fields(text), ""))
+	return strings.Contains(compact, "満点") || strings.Contains(compact, "配点") || strings.Contains(compact, "最高点") || compact == "max" || strings.Contains(compact, "maxscore")
+}
+
+func cellTextAt(row *goquery.Selection, index int) string {
+	if index < 0 {
+		return ""
+	}
+	cells := row.ChildrenFiltered("th, td")
+	if index >= cells.Length() {
+		return ""
+	}
+	return normalizedText(cells.Eq(index))
+}
+
+func parseAssignmentScore(text string) assignmentScore {
+	text = strings.Join(strings.Fields(text), " ")
+	record := assignmentScore{Raw: text, Submitted: text != "" && text != "未"}
+	if m := scorePairPattern.FindStringSubmatch(text); len(m) == 3 {
+		if score, err := strconv.ParseFloat(m[1], 64); err == nil {
+			record.Score, record.HasScore = score, true
+		}
+		if max, err := strconv.ParseFloat(m[2], 64); err == nil {
+			record.MaxScore, record.HasMaxScore = max, true
+		}
+		return record
+	}
+	if score, ok := parseSingleScore(text); ok {
+		record.Score, record.HasScore = score, true
+	}
+	return record
+}
+
+func parseSingleScore(text string) (float64, bool) {
+	m := scoreNumberPattern.FindStringSubmatch(strings.Join(strings.Fields(text), " "))
+	if len(m) != 2 {
+		return 0, false
+	}
+	n, err := strconv.ParseFloat(m[1], 64)
+	return n, err == nil
 }
 
 func assignmentRowTitle(nameNode *goquery.Selection) string {
