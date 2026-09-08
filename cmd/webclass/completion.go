@@ -132,6 +132,7 @@ func courseCandidates(dir, prefix string) []string {
 				seen[course.ID] = true
 			}
 		}
+	}
 
 	// Keep manifest IDs as a fallback for users who have not run the newer
 	// `courses` command since upgrading.
@@ -146,6 +147,7 @@ func courseCandidates(dir, prefix string) []string {
 				seen[entry.CourseID] = true
 			}
 		}
+	}
 
 	out := make([]string, 0, len(seen))
 	lowPrefix := strings.ToLower(prefix)
