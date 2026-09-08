@@ -7,9 +7,11 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,16 +19,24 @@ import (
 	"github.com/liquidcatmofu/webclass-cli/internal/webclass"
 )
 
+const (
+	ModeNew   = "new"
+	ModeFiles = "files"
+	ModeFull  = "full"
+)
+
 type Result struct {
 	New       int
 	Changed   int
 	Unchanged int
+	Skipped   int
 	Failed    int
 }
 
 type Options struct {
 	GroupDirs bool
 	Material  string
+	Mode      string
 }
 
 var (
@@ -34,11 +44,28 @@ var (
 	opaquePDFFilename = regexp.MustCompile(`(?i)^[0-9a-f]{16,64}\.pdf$`)
 )
 
+func ValidMode(mode string) bool {
+	switch mode {
+	case ModeNew, ModeFiles, ModeFull:
+		return true
+	default:
+		return false
+	}
+}
+
 func Run(client *webclass.Client, root string, course webclass.Course, options Options) (Result, error) {
 	manifest, err := state.Load(root)
 	if err != nil {
 		return Result{}, err
 	}
+	mode := strings.ToLower(strings.TrimSpace(options.Mode))
+	if mode == "" {
+		mode = ModeNew
+	}
+	if !ValidMode(mode) {
+		return Result{}, fmt.Errorf("unknown pull mode %q; use new, files, or full", mode)
+	}
+	options.Mode = mode
 
 	fmt.Printf("Scanning %s (%s)\n", course.Name, course.ID)
 	materials, stats, err := client.PullPlan(course)
@@ -50,10 +77,29 @@ func Run(client *webclass.Client, root string, course webclass.Course, options O
 	if err != nil {
 		return Result{}, err
 	}
+
+	knownMaterialsSkipped := 0
+	if mode == ModeNew {
+		candidates := make([]webclass.Resource, 0, len(materials))
+		for _, material := range materials {
+			group := stats.ResourceGroups[material.ID]
+			if materialKnown(manifest, material, group) {
+				knownMaterialsSkipped++
+				continue
+			}
+			candidates = append(candidates, material)
+		}
+		materials = candidates
+	}
+
 	if strings.TrimSpace(options.Material) == "" {
 		fmt.Printf("Materials: %d, candidates: %d\n", stats.Materials, len(materials))
 	} else {
-		fmt.Printf("Materials: %d, selected: %d (%q)\n", stats.Materials, len(materials), options.Material)
+		fmt.Printf("Materials: %d, selected candidates: %d (%q)\n", stats.Materials, len(materials), options.Material)
+	}
+	fmt.Printf("Mode: %s\n", mode)
+	if mode == ModeNew && knownMaterialsSkipped > 0 {
+		fmt.Printf("Known materials skipped without opening: %d\n", knownMaterialsSkipped)
 	}
 	printGroupOverview(stats)
 	printGroupedIssues(stats)
@@ -105,6 +151,7 @@ func Run(client *webclass.Client, root string, course webclass.Course, options O
 			started++
 		}
 
+		materialFailed := false
 		switch session.State {
 		case "limited":
 			fmt.Fprintln(os.Stderr, "    - skip (execution limit)")
@@ -117,10 +164,18 @@ func Run(client *webclass.Client, root string, course webclass.Course, options O
 			for _, link := range session.Links {
 				resource := material
 				resource.DownloadURL = link
+				if mode == ModeFiles {
+					if rel, ok := knownFileCanSkip(root, manifest, resource, group, options); ok {
+						fmt.Printf("    = %s (known, not downloaded)\n", rel)
+						result.Skipped++
+						continue
+					}
+				}
 				status, err := pullOne(client, root, manifest, resource, group, options)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "    ! download: %v\n", err)
 					result.Failed++
+					materialFailed = true
 					continue
 				}
 				switch status {
@@ -146,6 +201,10 @@ func Run(client *webclass.Client, root string, course webclass.Course, options O
 			closed++
 			fmt.Println("    closed")
 		}
+
+		if !materialFailed {
+			markMaterialKnown(manifest, material, group)
+		}
 	}
 
 	if err := manifest.Save(root); err != nil {
@@ -153,6 +212,128 @@ func Run(client *webclass.Client, root string, course webclass.Course, options O
 	}
 	fmt.Printf("\nProcessed %d/%d candidates; started %d, closed %d, downloadable files %d\n", len(materials), len(materials), started, closed, downloadable)
 	return result, nil
+}
+
+func materialManifestKey(courseID, resourceID string) string {
+	return courseID + "|" + resourceID
+}
+
+func materialKnown(manifest *state.Manifest, material webclass.Resource, group string) bool {
+	key := materialManifestKey(material.CourseID, material.ID)
+	if _, ok := manifest.Materials[key]; ok {
+		return true
+	}
+	// Backward compatibility with manifests created before material-level state
+	// existed: any downloaded entry proves that this material has been seen.
+	for _, entry := range manifest.Entries {
+		if entry.CourseID == material.CourseID && entry.ResourceID == material.ID {
+			markMaterialKnown(manifest, material, group)
+			return true
+		}
+	}
+	return false
+}
+
+func markMaterialKnown(manifest *state.Manifest, material webclass.Resource, group string) {
+	if manifest.Materials == nil {
+		manifest.Materials = map[string]state.MaterialEntry{}
+	}
+	manifest.Materials[materialManifestKey(material.CourseID, material.ID)] = state.MaterialEntry{
+		CourseID: material.CourseID, CourseName: material.CourseName,
+		ResourceID: material.ID, ResourceTitle: material.Title,
+		Group: group, SeenAt: time.Now(),
+	}
+}
+
+func knownFileCanSkip(root string, manifest *state.Manifest, resource webclass.Resource, group string, options Options) (string, bool) {
+	filename, ok := downloadFilenameHint(resource)
+	if !ok {
+		return "", false
+	}
+	key := resource.CourseID + "|" + resource.ID + "|" + filename
+	entry, ok := manifest.Entries[key]
+	if !ok {
+		// Older manifests should normally use the same key, but search by fields
+		// as a conservative fallback.
+		for _, candidate := range manifest.Entries {
+			if candidate.CourseID == resource.CourseID && candidate.ResourceID == resource.ID && candidate.Filename == filename {
+				entry = candidate
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		return "", false
+	}
+	desired := resourcePath(resource, group, filename, options)
+	if filepath.Clean(entry.Path) != filepath.Clean(desired) {
+		// Let pullOne handle layout migration/restoration. That can require a
+		// download, but it avoids claiming a file is current at the wrong path.
+		return "", false
+	}
+	managed, ok := managedPath(root, entry.Path)
+	if !ok {
+		return "", false
+	}
+	info, err := os.Stat(managed)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	return desired, true
+}
+
+func downloadFilenameHint(resource webclass.Resource) (string, bool) {
+	u, err := url.Parse(resource.DownloadURL)
+	if err != nil {
+		return "", false
+	}
+	if name := sanitize(u.Query().Get("file_name")); name != "" {
+		return name, true
+	}
+
+	// textbook_html.go marks HTML textbook bodies in the fragment so they can
+	// bypass OpenDownload's HTML landing-page behavior. Reconstruct the same
+	// user-facing filename here without any HTTP request.
+	if marker, err := url.ParseQuery(u.Fragment); err == nil && marker.Get("kind") == "webclass-cli-textbook-html" {
+		title := sanitize(marker.Get("title"))
+		if title == "" {
+			title = sanitize(resource.Title)
+		}
+		pageNumber, _ := strconv.Atoi(marker.Get("page"))
+		pageCount, _ := strconv.Atoi(marker.Get("pages"))
+		if pageNumber <= 0 {
+			pageNumber = 1
+		}
+		if pageCount <= 0 {
+			pageCount = 1
+		}
+		ext := strings.ToLower(path.Ext(u.Path))
+		if ext != ".htm" {
+			ext = ".html"
+		}
+		if pageCount > 1 {
+			title = fmt.Sprintf("%s - %02d", title, pageNumber)
+		}
+		if title != "" {
+			return title + ext, true
+		}
+	}
+
+	basename := sanitize(path.Base(u.Path))
+	if opaquePDFFilename.MatchString(basename) {
+		title := sanitize(resource.Title)
+		if title != "" && title != "resource" {
+			if !strings.HasSuffix(strings.ToLower(title), ".pdf") {
+				title += ".pdf"
+			}
+			return title, true
+		}
+	}
+	if basename != "" && basename != "." && path.Ext(basename) != "" && !strings.Contains(strings.ToLower(u.Path), "/file_down.php") {
+		return basename, true
+	}
+	return "", false
 }
 
 func selectMaterials(materials []webclass.Resource, stats webclass.PullResourceStats, query string) ([]webclass.Resource, error) {
