@@ -13,6 +13,7 @@ WebClass をコマンドラインから扱うための非公式 CLI クライア
 ```console
 webclass auth
 webclass courses
+webclass assignments
 webclass pull --dir ./materials <course-id>
 webclass completion bash|zsh|fish|powershell
 ```
@@ -76,10 +77,37 @@ Windowsの例:
 ```sh
 ./webclass auth --base-url 'https://example.ac.jp/webclass/'
 ./webclass courses --base-url 'https://example.ac.jp/webclass/'
+./webclass assignments --base-url 'https://example.ac.jp/webclass/'
 ./webclass pull --base-url 'https://example.ac.jp/webclass/' --dir ./materials <course-id>
 ```
 
 URL構成やHTMLが大きく異なるWebClassでは追加対応が必要な場合があります。
+
+## 課題一覧を取得する
+
+全コースの課題一覧を取得します。
+
+```sh
+./webclass assignments
+```
+
+1コースだけ確認する場合はコースIDを指定します。
+
+```sh
+./webclass assignments 02_26036
+```
+
+`assignments` はコース一覧ページと `/scores` の成績表だけを読みます。課題本文や `do_contents.php` は開かないため、アンケート・レポート・自習などの実行回数を消費しません。カテゴリが `資料` の項目は課題一覧から除外します。
+
+表示する提出状態は `提出済` / `未提出` / `再提出` / `不明` です。成績表にタイトルが存在する場合は、WebClassの `未` を未提出、それ以外の得点表示を提出済として扱います。コース一覧に「再提出が必要です。」と表示されている場合は `再提出` を優先します。導入先で成績表を取得できない場合など、確実に判定できない項目は `不明` と表示します。
+
+期限は `締め切り: YYYY/MM/DD HH:MM` または公開期間の終了日時を読み取り、期限が早い順に表示します。期限がない課題は後ろに並びます。
+
+WebClassへの連続アクセスを避けるため、既定ではHTTPリクエスト間に1秒空けます。
+
+```sh
+./webclass assignments --interval 2s
+```
 
 ## 資料を取得する
 
@@ -241,7 +269,7 @@ webclass.exe completion powershell | Out-String | Invoke-Expression
 
 コマンド名とオプションは直接補完されます。`--mode` の値も `new` / `files` / `full` から補完されます。
 
-`webclass courses` は取得したコースIDをアプリ設定ディレクトリへキャッシュし、`pull` でコース一覧を取得した場合も同じキャッシュを更新します。コースID補完はこのキャッシュを使用します。
+`webclass courses`、`pull`、`assignments` は取得したコース一覧をアプリ設定ディレクトリへキャッシュします。`pull <course-id>` と `assignments <course-id>` のコースID補完はこのキャッシュを使用します。
 
 資料タイトルの補完は、指定した `--dir` 配下の `.webclass-manifest.json` を使用します。
 
