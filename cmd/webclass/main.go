@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/liquidcatmofu/webclass-cli/internal/auth"
@@ -73,6 +74,67 @@ func run(args []string) error {
 		}
 		for _, c := range courses {
 			fmt.Printf("%s\t%s\n", c.ID, c.Name)
+		}
+		return nil
+
+	case "assignments":
+		fs := flag.NewFlagSet("assignments", flag.ContinueOnError)
+		base := fs.String("base-url", defaultBaseURL, "WebClass base URL")
+		interval := fs.Duration("interval", time.Second, "minimum quiet interval between WebClass HTTP requests")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() > 1 {
+			return errors.New("assignments accepts at most one course ID")
+		}
+		if *interval < 0 {
+			return errors.New("assignments --interval must not be negative")
+		}
+
+		client, err := webclass.New(*base)
+		if err != nil {
+			return err
+		}
+		client.SetRequestInterval(*interval)
+		fmt.Printf("Request interval: %s; assignment contents are not opened\n", interval.String())
+
+		courses, err := client.Courses()
+		if err != nil {
+			return err
+		}
+		if err := cache.SaveCourses(courses); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not update course completion cache: %v\n", err)
+		}
+		if fs.NArg() == 1 {
+			courseID := fs.Arg(0)
+			var selected []webclass.Course
+			for _, course := range courses {
+				if course.ID == courseID {
+					selected = append(selected, course)
+					break
+				}
+			}
+			if len(selected) == 0 {
+				return fmt.Errorf("course %q not found; run `webclass courses` to list course IDs", courseID)
+			}
+			courses = selected
+		}
+
+		failures := 0
+		for i, course := range courses {
+			assignments, err := client.Assignments(course)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: %s (%s): %v\n", course.Name, course.ID, err)
+				failures++
+				continue
+			}
+			if i > 0 {
+				fmt.Println()
+			}
+			printAssignments(course, assignments)
+		}
+		if failures > 0 {
+			return fmt.Errorf("failed to read assignments for %d course(s)", failures)
 		}
 		return nil
 
@@ -170,6 +232,38 @@ func run(args []string) error {
 	}
 }
 
+func printAssignments(course webclass.Course, assignments []webclass.Assignment) {
+	fmt.Printf("[%s] %s\n", course.ID, course.Name)
+	if len(assignments) == 0 {
+		fmt.Println("  課題なし")
+		return
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "期限\t状態\t種別\t課題")
+	for _, assignment := range assignments {
+		deadline := "-"
+		if assignment.HasDeadline {
+			deadline = assignment.DeadlineText
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", deadline, assignmentStatusLabel(assignment.SubmissionStatus), assignment.Category, assignment.Title)
+	}
+	_ = w.Flush()
+}
+
+func assignmentStatusLabel(status webclass.SubmissionStatus) string {
+	switch status {
+	case webclass.SubmissionSubmitted:
+		return "提出済"
+	case webclass.SubmissionPending:
+		return "未提出"
+	case webclass.SubmissionResubmit:
+		return "再提出"
+	default:
+		return "不明"
+	}
+}
+
 func usage() error {
 	fmt.Fprint(os.Stderr, usageText())
 	return nil
@@ -181,8 +275,13 @@ func usageText() string {
 Usage:
   webclass auth [--base-url URL] [--browser PATH]
   webclass courses [--base-url URL]
+  webclass assignments [--base-url URL] [--interval DURATION] [course-id]
   webclass pull [--base-url URL] [--dir DIR] [--group-dirs] [--interval DURATION] [--material NAME] [--mode new|files|full] <course-id>
   webclass completion bash|zsh|fish|powershell
+
+Assignments:
+  Lists non-material entries from course pages and checks submission state using the score sheet.
+  Assignment contents are never opened. Omit course-id to scan all courses.
 
 Pull modes:
   new    Open only materials that have not been seen before. This is the default.
@@ -192,7 +291,7 @@ Pull modes:
 When --material is specified without --mode, files mode is used so an explicitly selected material is actually checked.
 Works with WebClass instances that expose compatible WebClass 12.x HTML flows.
 The current fallback base URL is https://webclass.kosen-k.go.jp/webclass/ for backward compatibility; use --base-url for another instance.
-Pull defaults to a 1s quiet interval between WebClass HTTP requests and never sends concurrent requests.
-Shell completion never accesses WebClass; course IDs come from the last courses/pull cache and material names come from the local manifest.
+Pull and assignments default to a 1s quiet interval between WebClass HTTP requests.
+Shell completion never accesses WebClass; course IDs come from the last courses/pull/assignments cache and material names come from the local manifest.
 `
 }
