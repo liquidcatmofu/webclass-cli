@@ -51,11 +51,14 @@ func completionCandidates(words []string) []string {
 	case "courses":
 		flags = []string{"--base-url"}
 	case "pull":
-		flags = []string{"--base-url", "--dir", "--group-dirs", "--interval", "--material"}
+		flags = []string{"--base-url", "--dir", "--group-dirs", "--interval", "--material", "--mode"}
 	default:
 		return nil
 	}
 
+	if command == "pull" && strings.HasPrefix(current, "--mode=") {
+		return prefixCandidates(current, []string{"--mode=new", "--mode=files", "--mode=full"})
+	}
 	if strings.HasPrefix(current, "-") {
 		return prefixCandidates(current, flags)
 	}
@@ -69,6 +72,9 @@ func completionCandidates(words []string) []string {
 			dir := completionDir(before[1:])
 			courseID := completionCourse(before[1:])
 			return manifestMaterials(dir, courseID, current)
+		}
+		if prev == "--mode" {
+			return prefixCandidates(current, []string{"new", "files", "full"})
 		}
 		if prev == "--base-url" || prev == "--dir" || prev == "--interval" {
 			return nil
@@ -102,6 +108,7 @@ func completionCourse(words []string) string {
 		"--dir":      true,
 		"--interval": true,
 		"--material": true,
+		"--mode":     true,
 	}
 	for i := 0; i < len(words); i++ {
 		word := words[i]
@@ -125,17 +132,20 @@ func courseCandidates(dir, prefix string) []string {
 				seen[course.ID] = true
 			}
 		}
-	}
 
 	// Keep manifest IDs as a fallback for users who have not run the newer
 	// `courses` command since upgrading.
 	if manifest, err := state.Load(dir); err == nil {
+		for _, material := range manifest.Materials {
+			if material.CourseID != "" {
+				seen[material.CourseID] = true
+			}
+		}
 		for _, entry := range manifest.Entries {
 			if entry.CourseID != "" {
 				seen[entry.CourseID] = true
 			}
 		}
-	}
 
 	out := make([]string, 0, len(seen))
 	lowPrefix := strings.ToLower(prefix)
@@ -154,6 +164,14 @@ func manifestMaterials(dir, courseID, prefix string) []string {
 		return nil
 	}
 	seen := map[string]bool{}
+	for _, material := range manifest.Materials {
+		if courseID != "" && material.CourseID != courseID {
+			continue
+		}
+		if material.ResourceTitle != "" {
+			seen[material.ResourceTitle] = true
+		}
+	}
 	for _, entry := range manifest.Entries {
 		if courseID != "" && entry.CourseID != courseID {
 			continue
