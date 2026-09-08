@@ -256,7 +256,7 @@ func printGroupedIssues(stats webclass.PullResourceStats) {
 }
 
 func pullOne(client *webclass.Client, root string, manifest *state.Manifest, resource webclass.Resource, group string, options Options) (string, error) {
-	dl, err := client.OpenDownload(resource.DownloadURL)
+	dl, err := client.OpenPullDownload(resource.DownloadURL)
 	if err != nil {
 		return "", err
 	}
