@@ -34,9 +34,19 @@ func TestCompletionCandidatesUseCourseCacheAndManifestWithoutNetwork(t *testing.
 		t.Fatalf("course completion = %#v", got)
 	}
 
+	got = completionCandidates([]string{"assignments", "02_260"})
+	if len(got) != 3 || got[0] != "02_26036" || got[1] != "02_26046" || got[2] != "02_26098" {
+		t.Fatalf("assignments course completion = %#v", got)
+	}
+
 	got = completionCandidates([]string{"pull", "--dir", dir, "--material", "第"})
 	if len(got) != 2 || got[0] != "第1回 演習問題" || got[1] != "第2回 正規表現，NFAへの変換" {
 		t.Fatalf("material completion = %#v", got)
+	}
+
+	commands := completionCandidates([]string{"a"})
+	if len(commands) != 2 || commands[0] != "auth" || commands[1] != "assignments" {
+		t.Fatalf("command completion = %#v", commands)
 	}
 
 	if _, err := filepath.Abs(dir); err != nil {
