@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/liquidcatmofu/webclass-cli/internal/auth"
@@ -82,6 +83,7 @@ func run(args []string) error {
 		groupDirs := fs.Bool("group-dirs", false, "insert WebClass group folders between course and material directories")
 		interval := fs.Duration("interval", time.Second, "minimum quiet interval between WebClass HTTP requests")
 		material := fs.String("material", "", "pull only one material by exact title, unique substring, or contents ID")
+		mode := fs.String("mode", pull.ModeNew, "pull mode: new (unknown materials only), files (new files only), full (download/hash all files)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -90,6 +92,22 @@ func run(args []string) error {
 		}
 		if *interval < 0 {
 			return errors.New("pull --interval must not be negative")
+		}
+		modeExplicit := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "mode" {
+				modeExplicit = true
+			}
+		})
+		if !modeExplicit && strings.TrimSpace(*material) != "" {
+			// An explicitly selected material has traditionally been opened for an
+			// update. Keep that useful behavior while the global default becomes
+			// the lightweight new-material check.
+			*mode = pull.ModeFiles
+		}
+		*mode = strings.ToLower(strings.TrimSpace(*mode))
+		if !pull.ValidMode(*mode) {
+			return fmt.Errorf("invalid pull mode %q; use new, files, or full", *mode)
 		}
 		courseID := fs.Arg(0)
 
@@ -118,11 +136,11 @@ func run(args []string) error {
 			return fmt.Errorf("course %q not found; run `webclass courses` to list course IDs", courseID)
 		}
 
-		result, err := pull.Run(client, *dir, *selected, pull.Options{GroupDirs: *groupDirs, Material: *material})
+		result, err := pull.Run(client, *dir, *selected, pull.Options{GroupDirs: *groupDirs, Material: *material, Mode: *mode})
 		if err != nil {
 			return err
 		}
-		fmt.Printf("\n%d new, %d changed, %d unchanged, %d failed\n", result.New, result.Changed, result.Unchanged, result.Failed)
+		fmt.Printf("\n%d new, %d changed, %d unchanged, %d skipped, %d failed\n", result.New, result.Changed, result.Unchanged, result.Skipped, result.Failed)
 		if result.Failed > 0 {
 			return errors.New("some resources failed to download")
 		}
@@ -163,9 +181,15 @@ func usageText() string {
 Usage:
   webclass auth [--base-url URL] [--browser PATH]
   webclass courses [--base-url URL]
-  webclass pull [--base-url URL] [--dir DIR] [--group-dirs] [--interval DURATION] [--material NAME] <course-id>
+  webclass pull [--base-url URL] [--dir DIR] [--group-dirs] [--interval DURATION] [--material NAME] [--mode new|files|full] <course-id>
   webclass completion bash|zsh|fish|powershell
 
+Pull modes:
+  new    Open only materials that have not been seen before. This is the default.
+  files  Open all selected materials, but download only files not already in the local manifest.
+  full   Download every discovered file and compare SHA-256 hashes, including replacements.
+
+When --material is specified without --mode, files mode is used so an explicitly selected material is actually checked.
 Works with WebClass instances that expose compatible WebClass 12.x HTML flows.
 The current fallback base URL is https://webclass.kosen-k.go.jp/webclass/ for backward compatibility; use --base-url for another instance.
 Pull defaults to a 1s quiet interval between WebClass HTTP requests and never sends concurrent requests.
