@@ -240,28 +240,54 @@ func printAssignments(course webclass.Course, assignments []webclass.Assignment)
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "期限\t状態\t種別\t課題")
+	fmt.Fprintln(w, "期限\t判定\t得点\t種別\t課題")
 	for _, assignment := range assignments {
 		deadline := "-"
 		if assignment.HasDeadline {
 			deadline = assignment.DeadlineText
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", deadline, assignmentStatusLabel(assignment.SubmissionStatus), assignment.Category, assignment.Title)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", deadline, assignmentStatusLabel(assignment), assignmentScoreLabel(assignment), assignment.Category, assignment.Title)
 	}
 	_ = w.Flush()
 }
 
-func assignmentStatusLabel(status webclass.SubmissionStatus) string {
-	switch status {
-	case webclass.SubmissionSubmitted:
-		return "提出済"
-	case webclass.SubmissionPending:
-		return "未提出"
+func assignmentStatusLabel(assignment webclass.Assignment) string {
+	switch assignment.SubmissionStatus {
 	case webclass.SubmissionResubmit:
 		return "再提出"
-	default:
-		return "不明"
+	case webclass.SubmissionPending:
+		return "未提出"
 	}
+
+	if assignment.HasScore && assignment.HasMaxScore && assignment.MaxScore > 0 {
+		if assignment.Score >= assignment.MaxScore {
+			return "満点"
+		}
+		if assignment.Score == 0 {
+			return "0点"
+		}
+		return "部分点"
+	}
+	if assignment.HasScore {
+		return "採点済"
+	}
+	if assignment.SubmissionStatus == webclass.SubmissionSubmitted {
+		return "提出済"
+	}
+	return "不明"
+}
+
+func assignmentScoreLabel(assignment webclass.Assignment) string {
+	if assignment.HasScore && assignment.HasMaxScore {
+		return fmt.Sprintf("%g/%g", assignment.Score, assignment.MaxScore)
+	}
+	if assignment.HasScore {
+		return fmt.Sprintf("%g", assignment.Score)
+	}
+	if assignment.ScoreText != "" && assignment.ScoreText != "未" {
+		return assignment.ScoreText
+	}
+	return "-"
 }
 
 func usage() error {
@@ -280,8 +306,10 @@ Usage:
   webclass completion bash|zsh|fish|powershell
 
 Assignments:
-  Lists non-material entries from course pages and checks submission state using the score sheet.
-  Assignment contents are never opened. Omit course-id to scan all courses.
+  Lists non-material entries without opening them and reads the score sheet when available.
+  Numeric score/full-score data is used to distinguish full score, partial score, and zero score.
+  If the installation does not expose a full score, the command falls back to submission/score state.
+  Omit course-id to scan all courses.
 
 Pull modes:
   new    Open only materials that have not been seen before. This is the default.
