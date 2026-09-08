@@ -179,6 +179,10 @@ func (c *Client) discoverMaterialView(doc *goquery.Document, base *url.URL, dept
 		}
 	})
 
+	for _, link := range textbookHTMLBodyLinks(doc, base, c.Base.Hostname()) {
+		found[link] = true
+	}
+
 	closeAction := closeActionFromDocument(doc, base, c.Base.Hostname())
 	if depth <= 4 {
 		var frames []string
@@ -214,6 +218,30 @@ func (c *Client) discoverMaterialView(doc *goquery.Document, base *url.URL, dept
 				closeAction = childClose
 			}
 		}
+
+		// Browser-serialized WebClass pages can contain frame contents in srcdoc
+		// instead of src. Traverse those inline documents without issuing another
+		// request so textbook bodies, attachments, and close forms are still seen.
+		doc.Find("iframe[srcdoc], frame[srcdoc]").Each(func(_ int, frame *goquery.Selection) {
+			srcdoc := strings.TrimSpace(frame.AttrOr("srcdoc", ""))
+			if srcdoc == "" {
+				return
+			}
+			childDoc, err := goquery.NewDocumentFromReader(strings.NewReader(srcdoc))
+			if err != nil {
+				return
+			}
+			links, childClose, err := c.discoverMaterialView(childDoc, base, depth+1, visited)
+			if err != nil {
+				return
+			}
+			for _, link := range links {
+				found[link] = true
+			}
+			if childClose != nil && (closeAction == nil || childClose.ImpliesStarted) {
+				closeAction = childClose
+			}
+		})
 	}
 
 	links := make([]string, 0, len(found))
